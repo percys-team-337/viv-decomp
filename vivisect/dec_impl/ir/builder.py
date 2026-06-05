@@ -23,7 +23,7 @@ from vivisect.dec_impl.ir.expression import (
     build_mem_ref,
     sym_to_expr,
 )
-from vivisect.dec_impl.ir.instruction import (
+from vivisect.dec_impl.ir.effects import (
     Assignment,
     Branch,
     Call,

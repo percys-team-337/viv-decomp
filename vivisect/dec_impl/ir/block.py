@@ -21,6 +21,15 @@ class BasicBlock:
     is_exit: bool = False  # Does this block terminate the function?
     metadata: Dict = field(default_factory=dict)  # Extra info (flags, etc.)
 
+
+    def __hash__(self) -> int:
+        return id(self)
+
+    def __eq__(self, other):
+        if not isinstance(other, BasicBlock):
+            return NotImplemented
+        return self is other
+
     def add_predecessor(self, pred: "BasicBlock"):
         if pred not in self.predecessors:
             self.predecessors.append(pred)
@@ -32,7 +41,7 @@ class BasicBlock:
 
 
 # Forward reference
-from vivisect.dec_impl.ir.instruction import Instruction  # noqa: E402
+from vivisect.dec_impl.ir.effects import Instruction  # noqa: E402
 
 
 @dataclass
