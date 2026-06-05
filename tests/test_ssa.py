@@ -2,7 +2,7 @@
 Tests for dec_impl/ssa/construct.py — Braun's SSA construction algorithm.
 """
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from vivisect.dec_impl.ssa.construct import SsaState, SsaTransform

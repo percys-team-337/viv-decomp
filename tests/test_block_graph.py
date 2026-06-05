@@ -2,7 +2,7 @@
 Tests for ir/block.py — BasicBlock, BlockGraph.
 """
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
