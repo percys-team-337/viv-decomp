@@ -127,8 +127,10 @@ class TypeAnalyzer:
             size_map = {Size.SIZE_8: "uchar", Size.SIZE_16: "ushort",
                         Size.SIZE_32: "uint", Size.SIZE_64: "ulong"}
             return DataType(size_map.get(expr.size, "void") + "*", expr.size)
-        elif isinstance(expr, (BinOp, UnOp)):
+        elif isinstance(expr, BinOp):
             return self._infer_binop_type(expr)
+        elif isinstance(expr, UnOp):
+            return self._infer_unop_type(expr)
         elif isinstance(expr, CallExpr):
             return self._infer_call_return_type(expr)
         elif isinstance(expr, CastOp):
@@ -146,6 +148,14 @@ class TypeAnalyzer:
             return DataType.from_size(right_type.size, right_type.signed)
         return left_type
 
+    def _infer_unop_type(self, expr: UnOp) -> DataType:
+        """Infer type of unary operation. Result type matches operand."""
+        operand_type = self.infer_type_from_expr(expr.operand)
+        if operand_type.size == Size.AUTO:
+            return operand_type
+        # Preserve the operand's full type info (name, size, signedness)
+        return DataType(operand_type.name, operand_type.size, operand_type.signed)
+
     def _infer_call_return_type(self, expr: CallExpr) -> DataType:
         """Infer return type for a call."""
         return DataType.from_size(Size.AUTO)  # Default: unknown return
@@ -155,17 +165,19 @@ class TypeAnalyzer:
         if not phi_ops:
             return self.env.type_aliases.get("$phi", "")
 
-        types = set()
+        types: List[DataType] = []
         for var, _ in phi_ops:
             dtype = self.env.get_type(var)
-            if dtype:
-                types.add(dtype)
+            if dtype and dtype not in types:
+                types.append(dtype)
 
         if len(types) == 1:
-            return types.pop()
+            return types[0]
 
         # Multiple types: use largest common supertype
-        if DataType("int", Size.AUTO) in types:
-            return DataType("int", Size.AUTO)
+        # 'int' is a supertype of other types regardless of size
+        for dt in types:
+            if dt.name == "int":
+                return DataType("int", Size.AUTO)
 
         return DataType("unknown", Size.AUTO)
