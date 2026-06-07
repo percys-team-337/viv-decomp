@@ -208,10 +208,11 @@ class StructuringPass:
                         worklist.append(pred)
 
             self._loop_map[target.addr] = loop
-            if target in list(self._region_map.values()):
+            target_region = self._region_map.get(target.addr)
+            if target_region is not None:
                 for b in loop.body:
-                    if b not in region.blocks:
-                        region.blocks.append(b)
+                    if b not in target_region.blocks:
+                        target_region.blocks.append(b)
 
     def _build_structured_cfg(self) -> None:
         """Build structured block hierarchy from CFG."""

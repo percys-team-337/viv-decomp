@@ -237,7 +237,7 @@ class SsaTransform:
         """Rename variables to SSA form using stack-based renaming."""
         renamers: Dict[str, List[Var]] = {}
 
-        def rename(v: BasicBlock) -> Tuple[List[Assignment], List[PhiInstruction]]:
+        def rename(v: BasicBlock) -> Tuple[List[Assignment], List[PhiInstruction], List[Assignment]]:
             new_defs: List[Assignment] = []
             new_phis: List[PhiInstruction] = []
             new_assignments: List[Assignment] = []
