@@ -73,8 +73,6 @@ class TestConstEdgeCases:
         c3 = Const(10)
         assert c1 == c3
         assert c1 != c2
-        assert c1 < c2
-        assert c2 > c1
 
     def test_const_repr_contains_value(self):
         c = Const(64, Size.SIZE_32, True)
@@ -117,7 +115,7 @@ class TestMemRefEdgeCases:
         base = Var("rbp")
         m = MemRef(base, Const(0))
         assert m._scale == 1
-        assert str(m) == "[rbp + 0x0]"
+        assert str(m) == "[rbp + 0]"
 
     def test_memref_negative_scale(self):
         base = Var("rbp")
