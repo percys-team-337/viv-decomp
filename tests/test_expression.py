@@ -5,7 +5,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from vivisect.dec_impl.ir.expression import (
+from dec_engine.dec_impl.ir.expression import (
     Expression, Const, Var, MemRef, BinOp, UnOp, PhiNode, CallExpr, CastOp,
     OpType, Size, build_mem_ref,
 )

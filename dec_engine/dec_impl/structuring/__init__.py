@@ -1,5 +1,5 @@
 """Control flow structuring pass."""
-from vivisect.dec_impl.structuring.struct import (
+from dec_engine.dec_impl.structuring.struct import (
     StructuringPass,
     Region,
     Loop,

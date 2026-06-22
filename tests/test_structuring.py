@@ -5,15 +5,15 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
-from vivisect.dec_impl.structuring.struct import (
+from dec_engine.dec_impl.structuring.struct import (
     Region,
     Loop,
     StructuredBlock,
     StructuredCFG,
     StructuringPass,
 )
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ir.expression import Const, BinOp, Size, OpType
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ir.expression import Const, BinOp, Size, OpType
 
 
 # ── Fixtures ──

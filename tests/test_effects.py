@@ -5,7 +5,7 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
-from vivisect.dec_impl.ir.effects import (
+from dec_engine.dec_impl.ir.effects import (
     InstrClass,
     Assignment,
     Branch,
@@ -14,7 +14,7 @@ from vivisect.dec_impl.ir.effects import (
     NoOp,
     make_branch_condition,
 )
-from vivisect.dec_impl.ir.expression import Var, Const, MemRef, Size, OpType, BinOp
+from dec_engine.dec_impl.ir.expression import Var, Const, MemRef, Size, OpType, BinOp
 
 
 # ── InstrClass ──────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ class TestMakeBranchCondition:
 class TestInstructionType:
     def test_instruction_is_alias(self):
         """Verify Instruction is a union of all instruction types."""
-        from vivisect.dec_impl.ir.effects import Instruction
+        from dec_engine.dec_impl.ir.effects import Instruction
         # All these should be valid Instruction values
         valid: list[Instruction] = [
             Assignment(Var("x", Size.SIZE_32), Const(0, Size.SIZE_32)),

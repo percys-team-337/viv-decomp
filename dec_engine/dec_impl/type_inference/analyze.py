@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Set, Tuple
-from vivisect.dec_impl.ir.expression import (
+from dec_engine.dec_impl.ir.expression import (
     Expression,
     Var,
     MemRef,

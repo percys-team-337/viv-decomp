@@ -5,9 +5,9 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from vivisect.dec_impl.ssa.construct import SsaState, SsaTransform
-from vivisect.dec_impl.ir.expression import Const, Var, Size
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ssa.construct import SsaState, SsaTransform
+from dec_engine.dec_impl.ir.expression import Const, Var, Size
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
 
 
 class TestSsaState:

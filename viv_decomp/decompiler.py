@@ -26,10 +26,10 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ssa.construct import SsaState, SsaTransform
-from vivisect.dec_impl.type_inference.analyze import TypeAnalyzer, TypeEnvironment
-from vivisect.dec_impl.output.pretty import PrettyPrinter
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ssa.construct import SsaState, SsaTransform
+from dec_engine.dec_impl.type_inference.analyze import TypeAnalyzer, TypeEnvironment
+from dec_engine.dec_impl.output.pretty import PrettyPrinter
 
 logger = logging.getLogger("viv-decomp")
 
@@ -92,92 +92,60 @@ class VivisectGraphBuilder(GraphBuilder):
             ) from exc
 
     def get_graph(self, funcva: int, name: str = "") -> BlockGraph:
-        """Build a BlockGraph from the Vivisect workspace."""
+        """Build a BlockGraph from the Vivisect workspace using the symbolik graph."""
         if not self.workspace_loaded:
             self.load()
         vw = self.vw
         assert vw is not None, "Vivisect workspace not loaded"
 
-        # Build block graph from Vivisect's function analysis
-        blocks: dict[int, BasicBlock] = {}
+        # Ensure the function has a symbolik graph (analyzed)
+        if funcva not in vw.getFunctions():
+            # Try to discover it via analysis
+            try:
+                vw.analyzeFunction(funcva)
+            except Exception:
+                pass
 
-        # Get function blocks
-        func_blocks = vw.getFunctionBlocks(funcva)
-        if not func_blocks:
-            # Fallback: build from raw disassembly
-            func_blocks = {funcva: vw.getMeta("FunctionBlock", funcva)}
-
-        # Build blocks from Vivisect's instruction analysis
-        if func_blocks is None:
-            # No function at this address — try to extract one
-            func_blocks = {funcva: True}
-
-        # Gather all blocks by traversing xrefs
-        visited = set()
-        stack = [funcva]
-        while stack:
-            addr = stack.pop()
-            if addr in visited:
-                continue
-            visited.add(addr)
-
-            # Create or get block
-            block = blocks.get(addr)
-            if block is None:
-                block = BasicBlock(
-                    addr=addr,
-                    is_entry=(addr == funcva),
-                    label=f"bb_{addr:x}",
-                )
-                blocks[addr] = block
-
-            # Get successors from Vivisect
-            succs = vw.getXrefsDrw(addr) or vw.getXrefsTo(addr) or []
-            for (_, dst_addr, _) in succs:
-                if dst_addr not in blocks:
-                    blocks[dst_addr] = BasicBlock(
-                        addr=dst_addr,
-                        label=f"bb_{dst_addr:x}",
-                    )
-                    stack.append(dst_addr)
-                block.successors.append(blocks[dst_addr])
-                blocks[dst_addr].predecessors.append(block)
-
-        if not blocks:
+        if funcva not in vw.getFunctions():
+            # No function — build a minimal block graph
+            entry = BasicBlock(
+                addr=funcva, is_entry=True, label=f"bb_{funcva:x}" if funcva else "bb_entry",
+            )
+            fallback_name = f"func_{funcva:x}"
             return BlockGraph(
-                entry_block=BasicBlock(
-                    addr=funcva,
-                    is_entry=True,
-                    label=f"bb_{funcva:x}",
-                ),
-                blocks={},
-                name=name or f"func_{funcva:x}",
+                entry_block=entry, blocks={}, name=fallback_name,
             )
 
-        entry_block = blocks.get(funcva, blocks[funcva])
+        # Get symbolik graph from architecture-specific analysis context
+        from vivisect.symboliks.archs.amd64 import Amd64SymbolikAnalysisContext
+        from dec_engine.dec_impl.ir.builder import EffectsBuilder
 
-        # Collect all disassembly for this function
-        func_size = 0
-        try:
-            func_size = vw.getFunctionSize(funcva) or 0x100  # default fallback
-        except Exception:
-            func_size = 0x100
+        ctx = Amd64SymbolikAnalysisContext(vw)
+        sgraph = ctx.getSymbolikGraph(funcva)
 
-        all_vw_insts = vw.getFunctions()
-        for addr_in_func in range(funcva, funcva + func_size):
-            try:
-                inst = vw.parseDisasm(addr_in_func)
-                if inst is not None:
-                    pass  # placeholder for instruction parsing
-            except Exception:
-                break
+        # Validate we have symbolik effects to process
+        has_effects = False
+        for va_node, ninfo in sgraph.getNodes():
+            if isinstance(ninfo, dict) and 'symbolik_effects' in ninfo:
+                if ninfo['symbolik_effects']:
+                    has_effects = True
+                    break
 
-        graph = BlockGraph(
-            entry_block=entry_block,
-            blocks=blocks,
-            name=name or f"func_{funcva:x}",
-        )
-        return graph
+        builder = EffectsBuilder(funcva)
+        label = name or (vw.getName(funcva) if vw.getName(funcva) else f"func_{funcva:x}")
+
+        if has_effects:
+            return builder.build(sgraph, func_name=label)
+        else:
+            builder_empty = EffectsBuilder(funcva)
+            # Build with empty graph (no symbolik effects)
+            blocks_dict = {}
+            entry_block = BasicBlock(
+                addr=funcva, is_entry=True, label=f"func_{funcva:x}"
+            )
+            return BlockGraph(
+                entry_block=entry_block, blocks=blocks_dict, name=label,
+            )
 
 
 # ── Raw (stub) graph builder for testing ──
@@ -282,10 +250,10 @@ class VivisectDecompiler:
             json_data = {
                 "func_name": name or f"func_{funcva:x}",
                 "func_address": f"0x{funcva:x}",
-                "num_blocks": len(self.graph.blocks),
-                "ssa_rounds": getattr(self.ssa_state, "_rounds", 0) if self.ssa_state else 0,
+                "num_blocks": len(self.graph.blocks) if self.graph else 0,
+                "ssa_rounds": self.ssa_state._rounds if self.ssa_state and hasattr(self.ssa_state, "_rounds") else 0,
                 "type_env": {
-                    "num_types": len(self.type_env.types) if self.type_env else 0,
+                    "num_types": len(self.type_env.types) if self.type_env and hasattr(self.type_env, "types") else 0,
                 } if self.type_env else {},
             }
 

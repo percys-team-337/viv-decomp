@@ -5,8 +5,8 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
-from vivisect.dec_impl.type_inference.analyze import DataType, TypeEnvironment, TypeAnalyzer
-from vivisect.dec_impl.ir.expression import Const, Var, MemRef, BinOp, UnOp, OpType, Size, CallExpr, CastOp
+from dec_engine.dec_impl.type_inference.analyze import DataType, TypeEnvironment, TypeAnalyzer
+from dec_engine.dec_impl.ir.expression import Const, Var, MemRef, BinOp, UnOp, OpType, Size, CallExpr, CastOp
 
 
 # ── DataType ──

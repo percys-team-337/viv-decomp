@@ -40,17 +40,21 @@ class BasicBlock:
         return f"BB@0x{self.addr:x} ({len(self.instructions)} instr)"
 
 
-# Forward reference
-from vivisect.dec_impl.ir.effects import Instruction  # noqa: E402
+# Forward ref placeholder - Instruction type union resolved in builder.py
+Instruction = None  # type: ignore
 
 
 @dataclass
 class BlockGraph:
     """CFG for a function: set of basic blocks with control flow edges."""
 
-    entry_block: BasicBlock
+    entry_block: Optional[BasicBlock] = None  # type: ignore
     blocks: Dict[int, BasicBlock] = field(default_factory=dict)  # addr -> BB
     name: str = ""  # Function name
+
+    def __post_init__(self):
+        if self.entry_block is None and self.blocks:
+            self.entry_block = min(self.blocks.values(), key=lambda b: b.addr)
 
     def find_block_by_addr(self, addr: int) -> Optional[BasicBlock]:
         return self.blocks.get(addr, None)

@@ -5,10 +5,10 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
-from vivisect.dec_impl.output.formatter import Formatter
-from vivisect.dec_impl.ir.expression import Const, Var, MemRef, BinOp, OpType, Size, UnOp, PhiNode, CallExpr, CastOp
-from vivisect.dec_impl.ir.effects import Assignment, Branch, Call, PhiInstruction, NoOp
-from vivisect.dec_impl.ir.block import BasicBlock
+from dec_engine.dec_impl.output.formatter import Formatter
+from dec_engine.dec_impl.ir.expression import Const, Var, MemRef, BinOp, OpType, Size, UnOp, PhiNode, CallExpr, CastOp
+from dec_engine.dec_impl.ir.effects import Assignment, Branch, Call, PhiInstruction, NoOp
+from dec_engine.dec_impl.ir.block import BasicBlock
 
 
 @pytest.fixture

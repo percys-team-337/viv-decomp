@@ -5,9 +5,9 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import pytest
-from vivisect.dec_impl.output.pretty import PrettyPrinter
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ssa.construct import SsaState
+from dec_engine.dec_impl.output.pretty import PrettyPrinter
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ssa.construct import SsaState
 
 
 @pytest.fixture

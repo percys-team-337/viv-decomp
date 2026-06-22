@@ -6,7 +6,7 @@ Maps IR expression nodes to C-like syntax and manages control flow formatting.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, List
-from vivisect.dec_impl.ir.expression import (
+from dec_engine.dec_impl.ir.expression import (
     Expression,
     Const,
     Var,
@@ -19,17 +19,17 @@ from vivisect.dec_impl.ir.expression import (
     OpType,
     Size,
 )
-from vivisect.dec_impl.ir.effects import (
+from dec_engine.dec_impl.ir.effects import (
     Assignment,
     Branch,
     Call,
     PhiInstruction,
     NoOp,
 )
-from vivisect.dec_impl.ir.block import BasicBlock
+from dec_engine.dec_impl.ir.block import BasicBlock
 
 if TYPE_CHECKING:
-    from vivisect.dec_impl.type_inference.analyze import DataType
+    from dec_engine.dec_impl.type_inference.analyze import DataType
 
 
 class Formatter:
@@ -96,16 +96,47 @@ class Formatter:
 
     def _fmt_memref(self, expr: MemRef) -> str:
         """Format a memory reference: *(type*)addr."""
-        addr_str = self.fmt_expr(expr.base)
+        addr_str = self._fmt_memref_base(expr)
         scale_str = f"*{expr.scale}" if expr.scale != 1 else ""
         return f"({addr_str}{scale_str})"
 
+    def _fmt_memref_base(self, expr: MemRef) -> str:
+        """Format the base address of a MemRef, adding *(type*) prefix."""
+        addr_str = self.fmt_expr(expr.base)
+        size_name = self._size_to_type_name(expr.size) or self._size_to_type_name(Size.SIZE_64)
+        return f"({size_name}*){addr_str}"
+
+    def _size_to_type_name(self, sz) -> str:
+        """Convert Size to C type name."""
+        if sz == Size.SIZE_8:
+            return "uint8_t"
+        elif sz == Size.SIZE_16:
+            return "uint16_t"
+        elif sz == Size.SIZE_32:
+            return "uint32_t"
+        elif sz == Size.SIZE_64:
+            return "uint64_t"
+        return ""
+
     def _fmt_binop(self, expr: BinOp) -> str:
-        """Format a binary operation: a <op> b."""
-        lhs = self.fmt_expr(expr.left)
-        rhs = self.fmt_expr(expr.right)
+        """Format a binary operation: a <op> b with XOR simplification."""
+        lhs_raw = self.fmt_expr(expr.left)
+        rhs_raw = self.fmt_expr(expr.right)
+        
+        # XOR simplification: (X ^ X) → 0
+        if expr.op == OpType.XOR and lhs_raw == rhs_raw:
+            return "0"
+        
+        # Simplify XOR with 0: (X ^ 0) → X
+        if expr.op == OpType.XOR:
+            if rhs_raw == "0":
+                return lhs_raw
+            # Check for Const XOR with 0
+            if isinstance(expr.right, Const) and expr.right.value == 0:
+                return lhs_raw
+
         op_str = self._lookup_op(expr.op, " ")
-        return f"({lhs} {op_str} {rhs})"
+        return f"({lhs_raw} {op_str} {rhs_raw})"
 
     def _fmt_unop(self, expr: UnOp) -> str:
         """Format a unary operation: <op> a or a <op>."""

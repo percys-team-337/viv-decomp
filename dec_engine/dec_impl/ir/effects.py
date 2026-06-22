@@ -27,10 +27,10 @@ class InstrClass(Enum):
 class Assignment:
     """The fundamental IR instruction: dst = src"""
 
-    destination: Expression  # Can be Var or MemRef
-    source: Expression
+    destination: "Expression"  # Can be Var or MemRef
+    source: "Expression"
     class_: InstrClass = InstrClass.NORMAL
-    operands: List = field(default_factory=list)
+    operands: list = field(default_factory=list)
     mnemonic: str = ""  # Original assembly mnemonic
     address: int = 0  # Source address
 
@@ -42,13 +42,13 @@ class Assignment:
 class Branch:
     """Conditional or unconditional branch"""
 
-    condition: Optional[Expression]  # None = unconditional
-    true_target: "BasicBlock"
+    condition: Optional["Expression"]  # None = unconditional
+    true_target: "BasicBlock" = None  # type: ignore
     false_target: Optional["BasicBlock"] = None  # None for unconditional
     class_: InstrClass = InstrClass.BRANCH
     address: int = 0
     mnemonic: str = ""
-    jump_table_index: Optional[Expression] = None  # For switch/jump-table
+    jump_table_index: Optional["Expression"] = None  # For switch/jump-table
 
     def __repr__(self):
         if self.condition is None:
@@ -60,9 +60,9 @@ class Branch:
 class Call:
     """Function call in IR"""
 
-    callee: Expression
-    args: List[Expression]
-    return_var: Optional[Var] = None
+    callee: "Expression"
+    args: list
+    return_var: Optional["Var"] = None
     class_: InstrClass = InstrClass.CALL
     address: int = 0
     mnemonic: str = ""
@@ -72,8 +72,8 @@ class Call:
 class PhiInstruction:
     """Phi-function for SSA variable definition at block entry"""
 
-    variable: Var
-    operands: List[tuple[Expression, "BasicBlock"]]  # (value, predecessor_block)
+    variable: "Var"
+    operands: list  # (value, predecessor_block)
     class_: InstrClass = InstrClass.PHI
 
     def __repr__(self):
@@ -81,7 +81,6 @@ class PhiInstruction:
             f"{v} from BB@0x{b.addr:x}" for v, b in self.operands
         )
         return f"{self.variable.name}: phi({parts})"
-
 
 @dataclass
 class NoOp:
@@ -91,20 +90,34 @@ class NoOp:
     size: int = 1
 
 
-# Allow all IR instruction types to be used as valid instructions
-from vivisect.dec_impl.ir.expression import (  # noqa: E402
-    Expression,
-    Var,
-    MemRef,
-)
+@dataclass
+class ReturnInstruction:
+    """Function return"""
+    operands: list = field(default_factory=list)
+    class_: InstrClass = InstrClass.RETURN
+    address: int = 0
+    mnemonic: str = "ret"
 
-Instruction = Assignment | Branch | Call | PhiInstruction | NoOp
+    def __repr__(self):
+        return self.mnemonic
+
+
+@dataclass
+class SideEffect:
+    """Unclassified side effect (e.g., stack adjustment)"""
+    operands: list = field(default_factory=list)
+    class_: InstrClass = InstrClass.SIDE_EFFECT
+    address: int = 0
+    mnemonic: str = ""
+
+    def __repr__(self):
+        return f"{self.mnemonic} {' '.join(str(o) for o in self.operands)}"
 
 
 def make_branch_condition(
-    cond_expr: Expression,
+    cond_expr: "Expression",
     target: "BasicBlock",
-) -> Branch:
+) -> "Branch":
     """Helper to quickly construct a conditional branch."""
     return Branch(
         condition=cond_expr,
@@ -112,3 +125,10 @@ def make_branch_condition(
         address=getattr(target, "addr", 0),
         mnemonic="jz",
     )
+
+
+# Type alias for all valid IR instructions
+from dec_engine.dec_impl.ir.expression import Expression, Var, MemRef  # noqa: E402
+from dec_engine.dec_impl.ir.block import BasicBlock  # noqa: E402
+
+Instruction = Assignment | Branch | Call | PhiInstruction | NoOp

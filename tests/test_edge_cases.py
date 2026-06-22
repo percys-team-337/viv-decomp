@@ -10,23 +10,23 @@ Tests for:
 - Formatters with unhandled expression types
 """
 import pytest
-from vivisect.dec_impl.ir.expression import (
+from dec_engine.dec_impl.ir.expression import (
     Const, Var, MemRef, BinOp, UnOp, PhiNode, CallExpr, CastOp,
     OpType, Size, Expression, build_mem_ref
 )
-from vivisect.dec_impl.ir.effects import (
+from dec_engine.dec_impl.ir.effects import (
     Assignment, Branch, Call, PhiInstruction, NoOp, InstrClass, make_branch_condition
 )
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ssa.construct import SsaState, SsaTransform
-from vivisect.dec_impl.structuring.struct import (
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ssa.construct import SsaState, SsaTransform
+from dec_engine.dec_impl.structuring.struct import (
     Region, Loop, StructuredBlock, StructuredCFG, StructuringPass
 )
-from vivisect.dec_impl.type_inference.analyze import (
+from dec_engine.dec_impl.type_inference.analyze import (
     DataType, TypeEnvironment, TypeAnalyzer
 )
-from vivisect.dec_impl.output.formatter import Formatter
-from vivisect.dec_impl.output.pretty import PrettyPrinter
+from dec_engine.dec_impl.output.formatter import Formatter
+from dec_engine.dec_impl.output.pretty import PrettyPrinter
 
 
 # ── Expression edge cases ──

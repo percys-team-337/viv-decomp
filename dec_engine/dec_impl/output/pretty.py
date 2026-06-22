@@ -6,10 +6,11 @@ produces indented C-style output with proper control flow structures.
 """
 from __future__ import annotations
 from typing import List, Optional
-from vivisect.dec_impl.output.formatter import Formatter
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ir.effects import Branch, NoOp
-from vivisect.dec_impl.ssa.construct import SsaState
+from dec_engine.dec_impl.output.formatter import Formatter
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ir.effects import Branch, NoOp
+from dec_engine.dec_impl.ir.expression import Var  # noqa: F401
+from dec_engine.dec_impl.ssa.construct import SsaState
 
 
 class PrettyPrinter:
@@ -70,7 +71,7 @@ class PrettyPrinter:
 
     def _entry_addr(self) -> int:
         """Get the entry block address."""
-        from vivisect.dec_impl.ir.block import BasicBlock
+        from dec_engine.dec_impl.ir.block import BasicBlock
         if hasattr(self.graph, 'entry_block') and self.graph.entry_block:
             return self.graph.entry_block.addr
         if hasattr(self.graph, 'entry') and self.graph.entry:
@@ -134,6 +135,14 @@ class PrettyPrinter:
                 self._format_control_flow(instr, entry)
             elif isinstance(instr, NoOp):
                 self._output.append("    nop;")
+            elif instr.__class__.__name__ == 'Call':
+                self._output.append(f"    {self._format_call_instr(instr)};")
+            elif instr.__class__.__name__ == 'Assignment':
+                line = self._format_assignment_instr(instr)
+                # Strip eflags_* intermediate flags (Vivisect captures all CPU status)
+                if isinstance(instr.destination, Var) and instr.destination.name.startswith('eflags_'):
+                    continue
+                self._output.append(f"    {line};")
             else:
                 self._output.append(f"    {instr}")
         # Follow non-branch successors
@@ -148,3 +157,36 @@ class PrettyPrinter:
             self._output.append(f"    goto L_{target.addr}")
             return
         self._output.append(f"    if (condition) goto L_{instr.true_target.addr}")
+
+    def _format_assignment_instr(self, instr):
+        """Format an Assignment instruction: dst = src."""
+        from dec_engine.dec_impl.ir.effects import Assignment
+        dst = instr.destination
+        src = instr.source
+        # Format destination
+        dst_str = self._formatter.fmt_expr(dst) if hasattr(self, '_formatter') and self._formatter else str(dst)
+        # Format source
+        src_str = self._formatter.fmt_expr(src) if hasattr(self, '_formatter') and self._formatter else str(src)
+        return f"{dst_str} = {src_str}"
+
+    def _format_call_instr(self, instr):
+        """Format a Call instruction: func(args)."""
+        callee = instr.callee
+        args = instr.args
+        # Format callee with stub naming for raw addresses
+        callee_val = None
+        if hasattr(callee, 'value'):
+            callee_val = callee.value
+        elif isinstance(callee, Var) and callee.name and str(callee.name).startswith('0x'):
+            callee_val = int(str(callee.name), 16)
+        
+        if callee_val is not None:
+            callee_str = f"sub_{callee_val:x}"
+        else:
+            callee_str = self._formatter.fmt_expr(callee) if hasattr(self, '_formatter') and self._formatter else str(callee)
+        # Format args
+        args_str = ", ".join(
+            self._formatter.fmt_expr(a) if hasattr(self, '_formatter') and self._formatter else str(a)
+            for a in args
+        )
+        return f"{callee_str}({args_str})"

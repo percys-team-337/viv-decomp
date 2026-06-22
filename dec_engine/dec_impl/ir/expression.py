@@ -431,7 +431,7 @@ def sym_to_expr(effect, target_size: Optional[Size] = None) -> Expression:
 
     Bridges Vivisect's symboliks to our IR via SymbolikAdaptor.
     """
-    from vivisect.dec_impl.ir.builder import SymbolikAdaptor
+    from dec_engine.dec_impl.ir.builder import SymbolikAdaptor
     return SymbolikAdaptor.convert(effect, target_size)
 
 

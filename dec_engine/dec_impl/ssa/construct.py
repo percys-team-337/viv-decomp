@@ -6,9 +6,9 @@ Does NOT require explicit dominator tree (per Braun et al.).
 from __future__ import annotations
 
 from typing import Dict, List, Tuple, Optional, Set
-from vivisect.dec_impl.ir.expression import Var, PhiNode, Const, Size
-from vivisect.dec_impl.ir.effects import Assignment, PhiInstruction
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ir.expression import Var, PhiNode, Const, Size
+from dec_engine.dec_impl.ir.effects import Assignment, PhiInstruction
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
 
 
 class SsaState:
@@ -142,6 +142,12 @@ class SsaTransform:
             uses = set()
             for instr in b.instructions:
                 if isinstance(instr, Assignment):
+                    # destination can be Var or MemRef; only Var has .name
+                    from dec_engine.dec_impl.ir.expression import Var as _VarType
+                    if not isinstance(instr.destination, _VarType):
+                        # Memory store — register uses but no SSA def
+                        self._collect_uses(instr.source, uses)
+                        continue
                     defs.add(instr.destination.name)
                     self._collect_uses(instr.source, uses)
             var_defs[b] = defs
@@ -193,7 +199,7 @@ class SsaTransform:
 
     def _collect_uses(self, expr, uses: Set[str]):
         """Recursively collect all variable names from an expression."""
-        from vivisect.dec_impl.ir.expression import (
+        from dec_engine.dec_impl.ir.expression import (
             Var,
             MemRef,
             BinOp,
@@ -223,8 +229,12 @@ class SsaTransform:
         """Find the last definition of var_name in a block."""
         last_def: Optional[Var] = None
         for instr in block.instructions:
-            if isinstance(instr, Assignment) and instr.destination.name == var_name:
-                last_def = instr.destination
+            if isinstance(instr, Assignment):
+                from dec_engine.dec_impl.ir.expression import Var as _VarType
+                if not isinstance(instr.destination, _VarType):
+                    continue
+                if instr.destination.name == var_name:
+                    last_def = instr.destination
             elif isinstance(instr, PhiInstruction) and instr.variable.name == var_name:
                 last_def = instr.variable
         return last_def
@@ -244,6 +254,9 @@ class SsaTransform:
 
             for instr in v.instructions:
                 if isinstance(instr, Assignment):
+                    from dec_engine.dec_impl.ir.expression import Var as _VarType
+                    if not isinstance(instr.destination, _VarType):
+                        continue
                     dst_name = instr.destination.name
                     if dst_name not in renamers:
                         renamers[dst_name] = []

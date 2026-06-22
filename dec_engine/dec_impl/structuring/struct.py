@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Set, Tuple
-from vivisect.dec_impl.ir.block import BasicBlock, BlockGraph
-from vivisect.dec_impl.ir.expression import Expression
-from vivisect.dec_impl.ir.effects import Branch, NoOp
+from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ir.expression import Expression
+from dec_engine.dec_impl.ir.effects import Branch, NoOp
 
 
 class Region:
