@@ -73,6 +73,62 @@ class PrettyPrinter:
             if len(block.successors) >= 3:
                 self._switch_entries.add(addr)
 
+    def _detect_prologue_length(self, entry):
+        """Count prologue instructions in the entry block before real work."""
+        count = 0
+        saved_regs = set()
+        instrs = entry.instructions
+        i = 0
+        while i < len(instrs):
+            s = str(instrs[i])
+            # Skip eflags_* intermediate instructions
+            if 'eflags_' in s:
+                count += 1
+                i += 1
+                continue
+            # Detect push pattern: rsp decrement + store (rsp SUB 0x8) followed by [rsp] = reg
+            if 'rsp' in s and 'SUB 0x8' in s and i + 1 < len(instrs):
+                nxt = str(instrs[i + 1])
+                if '[rsp' in nxt:
+                    # Extract saved register: "[rsp + 0] = rbp" → rbp
+                    parts = nxt.split('= ')
+                    if len(parts) > 1:
+                        saved_regs.add(parts[1].strip())
+                    count += 2
+                    i += 2
+                    continue
+            # Frame pointer setup: rbp = rsp
+            if s.strip() == 'rbp = rsp':
+                count += 1
+                i += 1
+                continue
+            # Frame allocation: rsp = (rsp SUB N) where N > 8
+            if 'rsp' in s and 'SUB 0x' in s and '0x8' not in s:
+                count += 1
+                i += 1
+                continue
+            # Stack canary init: fs + 0x28 load sequence
+            if 'fs' in s and '0x28' in s:
+                count += 1
+                i += 1
+                continue
+            if 'rax' in s and 'fs' not in s and '= ((uint64_t*)(fs' not in s:
+                count += 1
+                i += 1
+                continue
+            break
+        self._prologue_saved_regs = saved_regs
+        return count
+
+    def _format_prologue(self, entry):
+        """Format condensed prologue as comments."""
+        lines = []
+        regs = getattr(self, '_prologue_saved_regs', set())
+        if regs:
+            lines.append(f"  // prologue: save {', '.join(sorted(regs))}")
+        lines.append(f"  // allocate stack frame")
+        return lines
+
     def _entry_addr(self) -> int:
         """Get the entry block address."""
         from dec_engine.dec_impl.ir.block import BasicBlock
@@ -190,9 +246,29 @@ class PrettyPrinter:
         if entry is None:
             self._output.append(f"  // Block 0x{addr:x} not found")
             return
-        # Add block label
-        self._output.append(f"  L_{addr}:")
+
+        # For the entry block, condense the prologue
+        if addr == self._entry_addr():
+            # Detect prologue first (populates _prologue_saved_regs)
+            prologue_len = self._detect_prologue_length(entry)
+            lines = self._format_prologue(entry)
+            # Add local variable declarations
+            if hasattr(self, '_stack_vars') and self._stack_vars:
+                # Sort by offset ascending
+                for off in sorted(self._stack_vars.keys()):
+                    vname = self._stack_vars[off]
+                    lines.append(f"    uint64_t {vname};")
+            self._output.extend(lines)
+        else:
+            prologue_len = 0
+
+        # Add block label (skip for entry after prologue)
+        if prologue_len == 0:
+            self._output.append(f"  L_{addr}:")
+        
         for i, instr in enumerate(entry.instructions):
+            if prologue_len > 0 and i < prologue_len:
+                continue
             if isinstance(instr, Branch) and i == len(entry.instructions) - 1:
                 self._format_control_flow(instr, entry)
             elif isinstance(instr, NoOp):
