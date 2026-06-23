@@ -33,6 +33,7 @@ class PrettyPrinter:
         ssa: SsaState,
         func_addr: Optional[int] = None,
         indent_size: int = 4,
+        imports: Optional[dict[int, str]] = None,
     ):
         self.func_name = func_name
         self.graph = graph
@@ -44,6 +45,8 @@ class PrettyPrinter:
         self._visited: set = set()
         self._loop_headers: set = set()
         self._switch_entries: set = set()
+        # Import/GOT symbol map: va -> symbol name
+        self._symbol_map = imports or {}
 
     def _build_var_map(self):
         """Build variable rename map from SSA variable registry."""
