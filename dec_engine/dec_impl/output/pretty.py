@@ -86,11 +86,46 @@ class PrettyPrinter:
         """Infer return type from function analysis."""
         return "int"  # Default return type
 
+    def _detect_stack_vars(self):
+        """Scan all blocks for stack-relative memory references and assign names."""
+        self._stack_vars = {}
+        seen_offsets = set()
+        for addr, block in self.graph.blocks.items():
+            for instr in block.instructions:
+                def walk_memref(expr):
+                    """Recursively find MemRef nodes with rbp base."""
+                    from dec_engine.dec_impl.ir.expression import MemRef, BinOp, Var, Const, OpType
+                    if isinstance(expr, MemRef):
+                        if isinstance(expr.base, BinOp) and expr.base.op in (OpType.ADD, OpType.SUB):
+                            bop = expr.base
+                            if hasattr(bop.left, 'name') and str(getattr(bop.left, 'name', '')) == 'rbp':
+                                if hasattr(bop.right, 'value') and isinstance(bop.right, Const):
+                                    off = bop.right.value
+                                    if off > 0 and off not in seen_offsets:
+                                        seen_offsets.add(off)
+                                        name = f"var_{off:x}"  # hex: var_5c, var_44
+                                        self._stack_vars[off] = name
+                    # Recurse into expression parts
+                    for attr in ('base', 'left', 'right', 'operand', 'from_expr', 'callee', 'destination'):
+                        child = getattr(expr, attr, None)
+                        if child is not None:
+                            walk_memref(child)
+                    # Recurse into arg lists
+                    for attr in ('args', 'operands', 'children'):
+                        seq = getattr(expr, attr, None) or []
+                        if isinstance(seq, (list, tuple)):
+                            for child in seq:
+                                walk_memref(child)
+                walk_memref(instr)
+
     def generate(self) -> str:
         """Generate the complete C-like pseudocode string."""
         self._visited.clear()
         self._output = []
 
+        # Detect stack variables
+        self._detect_stack_vars()
+        
         # Start with function prototype
         self._output.append(f"// Function: {self.func_name}")
         if self.func_addr is not None:
@@ -185,7 +220,26 @@ class PrettyPrinter:
         dst_str = self._formatter.fmt_expr(dst) if hasattr(self, '_formatter') and self._formatter else str(dst)
         # Format source
         src_str = self._formatter.fmt_expr(src) if hasattr(self, '_formatter') and self._formatter else str(src)
-        return f"{dst_str} = {src_str}"
+        line = f"{dst_str} = {src_str}"
+        # Apply stack variable naming: replace (rbp - 0xNN) with var_NN
+        if hasattr(self, '_stack_vars') and self._stack_vars:
+            import re
+            # Replace ((uint64_t*)(rbp - 0x5c)) -> (var_5c)
+            for off, vname in self._stack_vars.items():
+                hex_off = f"0x{off:x}"
+                # The formatted output uses double space due to f-string:
+                #   (rbp  -  0xNN)  ← 2 spaces each side of -
+                line = re.sub(
+                    rf'\(\(uint64_t\*\)\(rbp\s*-\s*{hex_off}\)\)',
+                    vname,  # Already a simple identifier
+                    line
+                )
+                line = re.sub(
+                    rf'\(rbp\s*-\s*{hex_off}\)',
+                    vname,
+                    line
+                )
+        return line
 
     def _format_call_instr(self, instr):
         """Format a Call instruction: func(args)."""

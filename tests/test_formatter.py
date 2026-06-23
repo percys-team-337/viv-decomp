@@ -125,9 +125,8 @@ class TestFmtExpressions:
         rhs = Const(2, Size.SIZE_32)
         op = BinOp(OpType.ADD, lhs, rhs, Size.SIZE_32)
         r = fmt.fmt_expr(op)
-        assert "+ " in r
-        assert "1" in r
-        assert "2" in r
+        # Constant folding should compute 1 + 2 = 3
+        assert r == "3"
 
     def test_fmt_binop_eq(self, fmt):
         lhs = Var("eax", Size.SIZE_32)

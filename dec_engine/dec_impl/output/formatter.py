@@ -135,6 +135,29 @@ class Formatter:
             if isinstance(expr.right, Const) and expr.right.value == 0:
                 return lhs_raw
 
+        # Constant folding: binop(const, const) → value
+        if isinstance(expr.left, Const) and isinstance(expr.right, Const):
+            lhs_val = expr.left.value
+            rhs_val = expr.right.value
+            if isinstance(lhs_val, int) and isinstance(rhs_val, int):
+                try:
+                    folded = {
+                        OpType.ADD: lhs_val + rhs_val,
+                        OpType.SUB: lhs_val - rhs_val,
+                        OpType.MUL: lhs_val * rhs_val,
+                        OpType.DIV: lhs_val // rhs_val,
+                        OpType.AND: lhs_val & rhs_val,
+                        OpType.OR: lhs_val | rhs_val,
+                        OpType.XOR: lhs_val ^ rhs_val,
+                        OpType.SHL: lhs_val << rhs_val,
+                        OpType.SHR: lhs_val >> rhs_val,
+                    }.get(expr.op)
+                    if folded is not None:
+                        # Use hex for 64-bit values, decimal for small
+                        return hex(folded) if folded > 0xfff else str(folded)
+                except (ZeroDivisionError, OverflowError, ValueError):
+                    pass
+
         op_str = self._lookup_op(expr.op, " ")
         return f"({lhs_raw} {op_str} {rhs_raw})"
 
