@@ -222,30 +222,31 @@ class VivisectDecompiler:
         """Run the full decompiler pipeline on a single function."""
         result = DecompOutput(text="", json={}, success=False)
         try:
-            # 1. Build graph
+            # 1. Build graph (this triggers graph_builder.load() → vw.analyze())
             self.graph = self.graph_builder.get_graph(funcva, name)
             logger.debug(f"Built BlockGraph: {len(self.graph.blocks)} blocks")
-
+            
             # 2. Run SSA construction
             if self.do_ssa:
                 self.ssa_state = SsaState()
                 ssa = SsaTransform(self.graph)
                 self.graph = ssa.analyze_graph()  # returns the graph
                 logger.debug("SSA construction complete")
-
+            
             # 3. Run type inference
             if self.analyze_types:
                 self.type_env = TypeAnalyzer().analyze()
                 logger.debug("Type inference complete")
-
-            # 4. Format output
+            
+            # 4. Format output — pass workspace for call target resolution via vw.getName()
             pp = PrettyPrinter(
                 func_name=name or f"func_{funcva:x}",
                 graph=self.graph,
                 ssa=self.ssa_state or SsaState(),
+                workspace=self.graph_builder.vw if hasattr(self.graph_builder, 'vw') else None,
             )
             c_code = pp.generate()
-
+            
             # Build structured JSON snapshot
             json_data = {
                 "func_name": name or f"func_{funcva:x}",

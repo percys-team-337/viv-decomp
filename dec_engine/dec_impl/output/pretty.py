@@ -33,7 +33,7 @@ class PrettyPrinter:
         ssa: SsaState,
         func_addr: Optional[int] = None,
         indent_size: int = 4,
-        imports: Optional[dict[int, str]] = None,
+        workspace=None,
     ):
         self.func_name = func_name
         self.graph = graph
@@ -45,8 +45,9 @@ class PrettyPrinter:
         self._visited: set = set()
         self._loop_headers: set = set()
         self._switch_entries: set = set()
-        # Import/GOT symbol map: va -> symbol name
-        self._symbol_map = imports or {}
+        self._vw = workspace
+        # Cache of names discovered via Vivisect's analysis
+        self._name_cache: dict[int, str] = {}
 
     def _build_var_map(self):
         """Build variable rename map from SSA variable registry."""
@@ -142,8 +143,22 @@ class PrettyPrinter:
                 self._output.append(f"    {self._format_call_instr(instr)};")
             elif instr.__class__.__name__ == 'Assignment':
                 line = self._format_assignment_instr(instr)
+                dst_name = ''
+                if isinstance(instr.destination, Var):
+                    dst_name = str(instr.destination.name) if instr.destination.name else ''
+                # Strip stack canary init: `rax = 0` when preceded by fs+0x28 load
+                if dst_name == 'rax' and '= 0' in line:
+                    # Check if this is the stack canary guard initialization
+                    # Pattern: after saving registers and loading __stack_chk_guard, set it to 0
+                    is_stack_canary = False
+                    for prev_line in self._output[-6:]:
+                        if '__stack_chk_guard' in prev_line or 'rax' in prev_line:
+                            is_stack_canary = True
+                            break
+                    if is_stack_canary:
+                        continue
                 # Strip eflags_* intermediate flags (Vivisect captures all CPU status)
-                if isinstance(instr.destination, Var) and instr.destination.name.startswith('eflags_'):
+                if isinstance(instr.destination, Var) and dst_name.startswith('eflags_'):
                     continue
                 self._output.append(f"    {line};")
             else:
@@ -176,15 +191,21 @@ class PrettyPrinter:
         """Format a Call instruction: func(args)."""
         callee = instr.callee
         args = instr.args
-        # Format callee with stub naming for raw addresses
+        # Resolve callee address to name via Vivisect's analysis
         callee_val = None
         if hasattr(callee, 'value'):
             callee_val = callee.value
         elif isinstance(callee, Var) and callee.name and str(callee.name).startswith('0x'):
             callee_val = int(str(callee.name), 16)
         
+        callee_str = None
         if callee_val is not None:
-            callee_str = f"sub_{callee_val:x}"
+            # Use Vivisect analysis to get function names for PLT/call targets
+            name = self._resolve_call_target(callee_val)
+            if name:
+                callee_str = name
+            else:
+                callee_str = f"sub_{callee_val:x}"
         else:
             callee_str = self._formatter.fmt_expr(callee) if hasattr(self, '_formatter') and self._formatter else str(callee)
         # Format args
@@ -193,3 +214,27 @@ class PrettyPrinter:
             for a in args
         )
         return f"{callee_str}({args_str})"
+    
+    def _resolve_call_target(self, addr: int) -> Optional[str]:
+        """Resolve an address to a named function using Vivisect's analysis."""
+        if addr in self._name_cache:
+            return self._name_cache[addr]
+        if not self._vw:
+            return None
+        try:
+            func = self._vw.getFunction(addr)
+            if func is not None:
+                raw_name = self._vw.getName(addr)
+                if raw_name:
+                    # Vivisect names PLT functions as 'binary.plt_<funcname>'
+                    # e.g. 'sh.plt_getuid' → 'getuid'
+                    # Strip module prefix (everything before last .)
+                    parts = raw_name.split('.')
+                    base_name = parts[-1]
+                    # Strip 'plt_' prefix to get the actual function name
+                    actual_name = base_name[4:] if base_name.startswith('plt_') else base_name
+                    self._name_cache[addr] = actual_name
+                    return actual_name
+        except Exception:
+            pass
+        return None
