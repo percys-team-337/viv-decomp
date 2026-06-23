@@ -90,8 +90,33 @@ class PrettyPrinter:
         """Scan all blocks for stack-relative memory references and assign names."""
         self._stack_vars = {}
         seen_offsets = set()
+        # Also track which _t_ temps are used as sources (to skip dead temp assigns)
+        self._used_temps = set()
         for addr, block in self.graph.blocks.items():
             for instr in block.instructions:
+                def walk_src_refs(expr, is_dest=False):
+                    """Find Var references starting with _t_ in source expressions."""
+                    from dec_engine.dec_impl.ir.expression import Var
+                    if isinstance(expr, Var) and hasattr(expr, 'name') and expr.name and not is_dest:
+                        name = str(expr.name)
+                        if name.startswith('_t_') or name.startswith('$_t_'):
+                            self._used_temps.add(name.lstrip('$'))
+                    # Recurse
+                    for attr in ('base', 'left', 'right', 'operand', 'from_expr', 'callee'):
+                        child = getattr(expr, attr, None)
+                        if child is not None:
+                            walk_src_refs(child, False)
+                    # Recurse into source (not destination) — destinations are writes, not reads
+                    src = getattr(expr, 'source', None)
+                    if src is not None:
+                        walk_src_refs(src, False)
+                    # Recurse into arg lists (these are source operands in Call)
+                    for attr in ('args', 'operands', 'children'):
+                        seq = getattr(expr, attr, None) or []
+                        for child in (seq if isinstance(seq, (list, tuple)) else []):
+                            walk_src_refs(child, False)
+                walk_src_refs(instr)
+
                 def walk_memref(expr):
                     """Recursively find MemRef nodes with rbp base."""
                     from dec_engine.dec_impl.ir.expression import MemRef, BinOp, Var, Const, OpType
@@ -103,19 +128,17 @@ class PrettyPrinter:
                                     off = bop.right.value
                                     if off > 0 and off not in seen_offsets:
                                         seen_offsets.add(off)
-                                        name = f"var_{off:x}"  # hex: var_5c, var_44
+                                        name = f"var_{off:x}"
                                         self._stack_vars[off] = name
                     # Recurse into expression parts
-                    for attr in ('base', 'left', 'right', 'operand', 'from_expr', 'callee', 'destination'):
+                    for attr in ('base', 'left', 'right', 'operand', 'from_expr', 'callee', 'destination', 'source'):
                         child = getattr(expr, attr, None)
                         if child is not None:
                             walk_memref(child)
-                    # Recurse into arg lists
                     for attr in ('args', 'operands', 'children'):
                         seq = getattr(expr, attr, None) or []
-                        if isinstance(seq, (list, tuple)):
-                            for child in seq:
-                                walk_memref(child)
+                        for child in (seq if isinstance(seq, (list, tuple)) else []):
+                            walk_memref(child)
                 walk_memref(instr)
 
     def generate(self) -> str:
@@ -195,6 +218,11 @@ class PrettyPrinter:
                 # Strip eflags_* intermediate flags (Vivisect captures all CPU status)
                 if isinstance(instr.destination, Var) and dst_name.startswith('eflags_'):
                     continue
+                # Strip dead _t_ temp assignments (SSA temps never read)
+                dst_str_check = self._formatter.fmt_expr(instr.destination) if hasattr(self, '_formatter') else str(instr.destination)
+                dst_str_check = dst_str_check.lstrip('$')  # Remove $ prefix before checking
+                if dst_str_check.startswith('_t_') and dst_str_check not in getattr(self, '_used_temps', set()):
+                    continue
                 self._output.append(f"    {line};")
             else:
                 self._output.append(f"    {instr}")
@@ -218,6 +246,9 @@ class PrettyPrinter:
         src = instr.source
         # Format destination
         dst_str = self._formatter.fmt_expr(dst) if hasattr(self, '_formatter') and self._formatter else str(dst)
+        # Clean up variable names: strip $ prefix from SSA temps
+        if dst_str.startswith('$_t_'):
+            dst_str = dst_str[1:]  # Remove leading $
         # Format source
         src_str = self._formatter.fmt_expr(src) if hasattr(self, '_formatter') and self._formatter else str(src)
         line = f"{dst_str} = {src_str}"
