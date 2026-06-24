@@ -140,23 +140,21 @@ class Formatter:
             lhs_val = expr.left.value
             rhs_val = expr.right.value
             if isinstance(lhs_val, int) and isinstance(rhs_val, int):
-                try:
-                    folded = {
-                        OpType.ADD: lhs_val + rhs_val,
-                        OpType.SUB: lhs_val - rhs_val,
-                        OpType.MUL: lhs_val * rhs_val,
-                        OpType.DIV: lhs_val // rhs_val,
-                        OpType.AND: lhs_val & rhs_val,
-                        OpType.OR: lhs_val | rhs_val,
-                        OpType.XOR: lhs_val ^ rhs_val,
-                        OpType.SHL: lhs_val << rhs_val,
-                        OpType.SHR: lhs_val >> rhs_val,
-                    }.get(expr.op)
-                    if folded is not None:
-                        # Use hex for 64-bit values, decimal for small
-                        return hex(folded) if folded > 0xfff else str(folded)
-                except (ZeroDivisionError, OverflowError, ValueError):
-                    pass
+                fold_ops = {
+                    OpType.ADD: lambda a, b: a + b,
+                    OpType.SUB: lambda a, b: a - b,
+                    OpType.MUL: lambda a, b: a * b,
+                    OpType.DIV: lambda a, b: a // b,
+                    OpType.AND: lambda a, b: a & b,
+                    OpType.OR: lambda a, b: a | b,
+                    OpType.XOR: lambda a, b: a ^ b,
+                    OpType.SHL: lambda a, b: a << b,
+                    OpType.SHR: lambda a, b: a >> b,
+                }
+                folded_fn = fold_ops.get(expr.op)
+                if folded_fn is not None:
+                    folded = folded_fn(lhs_val, rhs_val)
+                    return hex(folded) if folded > 0xfff else str(folded)
 
         op_str = self._lookup_op(expr.op, " ")
         return f"({lhs_raw} {op_str} {rhs_raw})"

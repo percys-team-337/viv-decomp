@@ -237,7 +237,7 @@ class PrettyPrinter:
 
         return "\n".join(self._output)
 
-    def _enter_block(self, addr: Optional[int]):
+    def _enter_block(self, addr: Optional[int], show_label: bool = True):
         """Recursively enter blocks and generate pseudocode."""
         if addr is None or addr in self._visited:
             return
@@ -262,16 +262,18 @@ class PrettyPrinter:
         else:
             prologue_len = 0
 
-        # Add block label (skip for entry after prologue)
-        if prologue_len == 0:
+        # Add block label (skip for entry after prologue, or when suppressed)
+        if prologue_len == 0 and show_label:
             self._output.append(f"  L_{addr}:")
         
         for i, instr in enumerate(entry.instructions):
             if prologue_len > 0 and i < prologue_len:
                 continue
-            if isinstance(instr, Branch) and i == len(entry.instructions) - 1:
-                self._format_control_flow(instr, entry)
-            elif isinstance(instr, NoOp):
+            if isinstance(instr, Branch):
+                # Branches handled by _format_control_flow below
+                self._branches_handled = True
+                continue
+            if isinstance(instr, NoOp):
                 self._output.append("    nop;")
             elif instr.__class__.__name__ == 'Call':
                 self._output.append(f"    {self._format_call_instr(instr)};")
@@ -302,18 +304,60 @@ class PrettyPrinter:
                 self._output.append(f"    {line};")
             else:
                 self._output.append(f"    {instr}")
-        # Follow non-branch successors
-        for succ in entry.successors:
-            if succ.addr not in self._visited:
-                self._enter_block(succ.addr)
+        # Handle control flow from branch instructions
+        if getattr(self, '_branches_handled', False):
+            first_branch = next(
+                (ins for ins in entry.instructions if isinstance(ins, Branch)),
+                None
+            )
+            if first_branch:
+                self._format_control_flow(first_branch, entry)
+        else:
+            # Follow non-branch successors
+            for succ in entry.successors:
+                if succ.addr not in self._visited:
+                    self._enter_block(succ.addr)
 
     def _format_control_flow(self, instr, block):
-        """Format control flow from branch instruction."""
-        if not instr.condition:
-            target = instr.true_target
+        """Format control flow from branch instruction.
+        Detects if-then-else patterns from successor blocks and emits structured code.
+        """
+        from dec_engine.dec_impl.ir.effects import Branch
+        
+        # If we have a valid block, try to detect if/else patterns
+        branches = []
+        if block is not None and hasattr(block, 'instructions'):
+            branches = [ins for ins in block.instructions if isinstance(ins, Branch)]
+        
+        # Check the pattern: 2 conditional branches targeting different blocks
+        if len(branches) >= 2:
+            b1, b2 = branches[0], branches[1]
+            cond1_str = self._formatter.fmt_expr(b1.condition) if b1.condition else "condition"
+            cond2_str = self._formatter.fmt_expr(b2.condition) if b2.condition else "condition"
+            
+            # Detect negation patterns: if (NOT(X)) { A } else { B } -> if (X) { A } else { B }
+            if cond1_str.startswith('NOT(') or cond1_str.startswith('~(') or cond1_str == '~' + cond2_str:
+                cond1_str = cond1_str[4:].rstrip(')') if cond1_str.startswith('NOT(') else cond1_str[1:].rstrip(')')
+                cond1_str, cond2_str = cond2_str, cond1_str
+            
+            if b1.condition and b2.condition:
+                self._output.append(f"    if ({cond1_str})")
+                self._output.append("    {")
+                self._enter_block(b1.true_target.addr, show_label=False)
+                self._output.append("    }")
+                self._output.append("    else")
+                self._output.append("    {")
+                self._enter_block(b2.true_target.addr, show_label=False)
+                self._output.append("    }")
+                return
+        
+        # Fallback: emit based on the passed instruction
+        target = getattr(instr, 'true_target', None)
+        if target is not None and hasattr(instr, 'condition') and instr.condition:
+            cond = self._formatter.fmt_expr(instr.condition) if hasattr(self, '_formatter') else str(instr.condition)
+            self._output.append(f"    if ({cond}) goto L_{target.addr}")
+        elif target is not None:
             self._output.append(f"    goto L_{target.addr}")
-            return
-        self._output.append(f"    if (condition) goto L_{instr.true_target.addr}")
 
     def _format_assignment_instr(self, instr):
         """Format an Assignment instruction: dst = src."""

@@ -349,26 +349,32 @@ class EffectsBuilder:
                 continue
 
             for einfo in refs:
-                # Extract target node id from edge info
-                dst_nid = einfo.get('to_id')
-                if dst_nid is None:
-                    # einfo might be dict-like with different key
-                    if hasattr(einfo, 'to_id'):
-                        dst_nid = einfo.to_id
-                    else:
-                        # try unpacking if it's tuple-like
-                        try:
-                            dst_nid = tuple(einfo)[0] if einfo else None
-                        except Exception:
-                            continue
+                # Vivisect's getRefsFrom returns tuples: (hash, from_nid, to_nid, [info_dict])
+                if isinstance(einfo, tuple):
+                    # Unpack tuple format: (hash, from_nid, to_nid, info_dict?)
+                    dst_nid = einfo[2] if len(einfo) >= 3 else None
+                    edge_info = einfo[3] if len(einfo) >= 4 and isinstance(einfo[3], dict) else {}
+                elif hasattr(einfo, 'get'):
+                    dst_nid = einfo.get('to_id')
+                    edge_info = einfo if isinstance(einfo, dict) else {}
+                elif hasattr(einfo, 'to_id'):
+                    dst_nid = einfo.to_id
+                    edge_info = {}
+                else:
+                    try:
+                        seq = tuple(einfo) if hasattr(einfo, '__iter__') else ()
+                        dst_nid = seq[0] if seq else None
+                        edge_info = seq[-1] if len(seq) > 1 and isinstance(seq[-1], dict) else {}
+                    except Exception:
+                        continue
 
                 if dst_nid is None:
                     continue
 
                 # Resolve target VA: getRefsFrom may give us the nid OR the target va as 'to_addr'
-                tgt_va = einfo.get('to_addr')
-                if tgt_va is None and hasattr(einfo, 'to_addr'):
-                    tgt_va = einfo.to_addr
+                tgt_va = edge_info.get('to_addr')
+                if tgt_va is None and hasattr(edge_info, 'to_addr'):
+                    tgt_va = edge_info.to_addr
                     
                 if tgt_va is not None and tgt_va != 0:
                     pass  # use the to_addr directly
@@ -420,9 +426,9 @@ class EffectsBuilder:
                     tgt_bb.predecessors.append(src_bb)
 
                 # Extract constraint from edge info
-                cons_list = einfo.get('symbolik_constraints', None)
-                if cons_list is None and hasattr(einfo, 'symbolik_constraints'):
-                    cons_list = einfo.symbolik_constraints
+                cons_list = edge_info.get('symbolik_constraints', None)
+                if cons_list is None and hasattr(edge_info, 'symbolik_constraints'):
+                    cons_list = edge_info.symbolik_constraints
                 
                 if cons_list and hasattr(cons_list, '__iter__') and cons_list is not True:
                     for cons in cons_list:
