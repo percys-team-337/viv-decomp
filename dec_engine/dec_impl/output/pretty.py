@@ -139,8 +139,56 @@ class PrettyPrinter:
         return min(self.graph.blocks.keys()) if self.graph.blocks else 0
 
     def _get_return_type(self) -> str:
-        """Infer return type from function analysis."""
-        return "int"  # Default return type
+        """Get return type from Vivisect API info if available."""
+        if self.func_addr is None or not self._vw:
+            return "int"
+        try:
+            api = self._vw.getFunctionApi(self.func_addr)
+            if api and isinstance(api, tuple) and len(api) >= 5:
+                ret = api[0]
+                if ret and ret != 'None':
+                    return ret
+        except Exception:
+            pass
+        return "int"
+
+    def _get_param_types(self) -> list[tuple[str, Optional[str]]]:
+        """Get parameter types from Vivisect API info. Returns list of (type, name) tuples."""
+        if self.func_addr is None or not self._vw:
+            return []
+        try:
+            api = self._vw.getFunctionApi(self.func_addr)
+            if api and isinstance(api, tuple) and len(api) >= 5:
+                proto = api[1] if len(api) > 1 else None
+                if proto and hasattr(proto, 'params') and proto.params:
+                    params = []
+                    for p in proto.params:
+                        if p is None:
+                            continue
+                        ptype = str(getattr(p, 'type', 'unknown'))
+                        pname = getattr(p, 'name', None)
+                        if pname:
+                            params.append((ptype, pname))
+                        else:
+                            params.append((ptype, None))
+                    return params
+                # Fallback: check api[4] (params list)
+                params_list = api[4] if len(api) > 4 and api[4] else None
+                if params_list and hasattr(params_list, '__iter__'):
+                    params = []
+                    for param in params_list:
+                        if param is None:
+                            continue
+                        ptype = str(getattr(param, 'type', 'unknown'))
+                        pname = getattr(param, 'name', None)
+                        if pname:
+                            params.append((ptype, pname))
+                        else:
+                            params.append((ptype, None))
+                    return params
+        except Exception:
+            pass
+        return []
 
     def _detect_stack_vars(self):
         """Scan all blocks for stack-relative memory references and assign names."""
@@ -341,14 +389,39 @@ class PrettyPrinter:
                 cond1_str, cond2_str = cond2_str, cond1_str
             
             if b1.condition and b2.condition:
+                # Check for empty blocks to avoid dead code in output
+                b1_block = self.graph.blocks.get(b1.true_target.addr)
+                b2_block = self.graph.blocks.get(b2.true_target.addr)
+                b1_has_code = b1_block and any(
+                    not isinstance(i, Branch) 
+                    for i in b1_block.instructions
+                )
+                b2_has_code = b2_block and any(
+                    not isinstance(i, Branch) 
+                    for i in b2_block.instructions
+                )
+                
+                # If the if-block is empty, emit else-if construct instead
+                if not b1_has_code and b2_has_code:
+                    self._output.append(f"    if ({cond1_str})")
+                    self._output.append("    {")
+                    self._output.append("    }")
+                    self._output.append("    else if ({cond2_str})")
+                    self._output.append("    {")
+                    self._enter_block(b2.true_target.addr, show_label=False)
+                    self._output.append("    }")
+                    return
+                
                 self._output.append(f"    if ({cond1_str})")
                 self._output.append("    {")
-                self._enter_block(b1.true_target.addr, show_label=False)
+                if b1_has_code:
+                    self._enter_block(b1.true_target.addr, show_label=False)
                 self._output.append("    }")
-                self._output.append("    else")
-                self._output.append("    {")
-                self._enter_block(b2.true_target.addr, show_label=False)
-                self._output.append("    }")
+                if b2_has_code:
+                    self._output.append("    else")
+                    self._output.append("    {")
+                    self._enter_block(b2.true_target.addr, show_label=False)
+                    self._output.append("    }")
                 return
         
         # Fallback: emit based on the passed instruction
