@@ -157,6 +157,8 @@ class Formatter:
                     return hex(folded) if folded > 0xfff else str(folded)
 
         op_str = self._lookup_op(expr.op, " ")
+        # Remove trailing space since we add spaces in the f-string itself
+        op_str = op_str.rstrip()
         return f"({lhs_raw} {op_str} {rhs_raw})"
 
     def _fmt_unop(self, expr: UnOp) -> str:
