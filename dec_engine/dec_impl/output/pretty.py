@@ -129,14 +129,14 @@ class PrettyPrinter:
         lines.append(f"  // allocate stack frame")
         return lines
 
-    def _entry_addr(self) -> int:
+    def _entry_addr(self) -> Optional[int]:
         """Get the entry block address."""
         from dec_engine.dec_impl.ir.block import BasicBlock
         if hasattr(self.graph, 'entry_block') and self.graph.entry_block:
             return self.graph.entry_block.addr
         if hasattr(self.graph, 'entry') and self.graph.entry:
             return self.graph.entry
-        return min(self.graph.blocks.keys()) if self.graph.blocks else 0
+        return min(self.graph.blocks.keys()) if self.graph.blocks else None
 
     def _get_return_type(self) -> str:
         """Get return type from Vivisect API info if available."""
@@ -274,13 +274,14 @@ class PrettyPrinter:
             }
             self._enter_block(self._entry_addr())
             self._formatter.dec()
+            self._output.append("}")
         else:
             self._output.append(")")
             self._output.append("{")
             self._output.append("  // No entry point found")
             self._output.append("}")
 
-        self._output.append("}")
+
         self._output.append("")
 
         return "\n".join(self._output)
@@ -380,12 +381,17 @@ class PrettyPrinter:
         # Check the pattern: 2 conditional branches targeting different blocks
         if len(branches) >= 2:
             b1, b2 = branches[0], branches[1]
-            cond1_str = self._formatter.fmt_expr(b1.condition) if b1.condition else "condition"
-            cond2_str = self._formatter.fmt_expr(b2.condition) if b2.condition else "condition"
+            cond1_raw = self._formatter.fmt_expr(b1.condition) if b1.condition else "condition"
+            cond2_raw = self._formatter.fmt_expr(b2.condition) if b2.condition else "condition"
+            
+            # Recognize eflags-based conditions (Vivisect stores them as vars like eflags_eq, eflags_ne)
+            # Convert to readable form with a note that the actual comparison is unknown
+            cond1_str = f"/* {cond1_raw}: flags */" if cond1_raw.startswith('eflags_') else cond1_raw
+            cond2_str = f"/* {cond2_raw}: flags */" if cond2_raw.startswith('eflags_') else cond2_raw
             
             # Detect negation patterns: if (NOT(X)) { A } else { B } -> if (X) { A } else { B }
-            if cond1_str.startswith('NOT(') or cond1_str.startswith('~(') or cond1_str == '~' + cond2_str:
-                cond1_str = cond1_str[4:].rstrip(')') if cond1_str.startswith('NOT(') else cond1_str[1:].rstrip(')')
+            if cond1_raw.startswith('NOT(') or cond1_raw.startswith('~(') or cond1_raw == '~' + cond2_raw:
+                base_cond1 = cond1_str[4:].rstrip(')') if cond1_str.startswith('/* NOT(') and ': flags */' in cond1_str else cond1_str
                 cond1_str, cond2_str = cond2_str, cond1_str
             
             if b1.condition and b2.condition:
@@ -403,16 +409,34 @@ class PrettyPrinter:
                 
                 # If the if-block is empty, emit else-if construct instead
                 if not b1_has_code and b2_has_code:
-                    self._output.append(f"    if ({cond1_str})")
+                    # Check if condition is eflags-based (unresolved)
+                    if '/*' in cond1_str and '*/' in cond1_str:
+                        self._output.append(f"    {cond1_str}")
+                        self._output.append("    if (*)")  # Unresolved condition
+                    else:
+                        self._output.append(f"    if ({cond1_str})")
                     self._output.append("    {")
                     self._output.append("    }")
-                    self._output.append("    else if ({cond2_str})")
+                    
+                    # Handle cond2 the same way for eflags
+                    if '/*' in cond2_str and '*/' in cond2_str:
+                        self._output.append(f"    else /* flags condition */")
+                        self._output.append("    if (*)")
+                    else:
+                        self._output.append(f"    else if ({cond2_str})")
+                    
                     self._output.append("    {")
                     self._enter_block(b2.true_target.addr, show_label=False)
                     self._output.append("    }")
                     return
                 
-                self._output.append(f"    if ({cond1_str})")
+                # Normal if-else handling  
+                if '/*' in cond1_str and '*/' in cond1_str:
+                    self._output.append(f"    {cond1_str}")
+                    self._output.append("    if (*)")
+                else:
+                    self._output.append(f"    if ({cond1_str})")
+                
                 self._output.append("    {")
                 if b1_has_code:
                     self._enter_block(b1.true_target.addr, show_label=False)
@@ -428,7 +452,13 @@ class PrettyPrinter:
         target = getattr(instr, 'true_target', None)
         if target is not None and hasattr(instr, 'condition') and instr.condition:
             cond = self._formatter.fmt_expr(instr.condition) if hasattr(self, '_formatter') else str(instr.condition)
-            self._output.append(f"    if ({cond}) goto L_{target.addr}")
+            # Recognize eflags-based conditions (Vivisect stores them as vars like eflags_eq, eflags_ne)
+            # Convert to readable form with a note that the actual comparison is unknown
+            if cond.startswith('eflags_'):
+                self._output.append(f"    /* {cond}: check flags from previous cmp/test */")
+                self._output.append(f"    if (1) goto L_{target.addr}")  # Always true - condition unresolved
+            else:
+                self._output.append(f"    if ({ cond}) goto L_{ target.addr}")
         elif target is not None:
             self._output.append(f"    goto L_{target.addr}")
 
@@ -469,23 +499,54 @@ class PrettyPrinter:
         """Format a Call instruction: func(args)."""
         callee = instr.callee
         args = instr.args
-        # Resolve callee address to name via Vivisect's analysis
-        callee_val = None
-        if hasattr(callee, 'value'):
-            callee_val = callee.value
-        elif isinstance(callee, Var) and callee.name and str(callee.name).startswith('0x'):
-            callee_val = int(str(callee.name), 16)
         
+        # Resolve callee to name
         callee_str = None
+        callee_val = None
+        
+        # Try to extract address from various node types
+        if hasattr(callee, 'value'):
+            # Const node with direct address
+            callee_val = callee.value
+        elif isinstance(callee, Var) and callee.name:
+            # Check if it's a register holding a known function pointer
+            name_candidate = str(callee.name)
+            # Look up if this is a known PLT stub address stored in rax/rbx/etc
+            # Common pattern: mov rax, sub_... ; call rax -> we see the var but not the value
+            # Try to resolve from workspace if we have register info (complex case - skip for now)
+            pass
+        
+        # If we have a concrete address, use it; otherwise format the expression as-is
         if callee_val is not None:
-            # Use Vivisect analysis to get function names for PLT/call targets
             name = self._resolve_call_target(callee_val)
             if name:
                 callee_str = name
             else:
                 callee_str = f"sub_{callee_val:x}"
-        else:
-            callee_str = self._formatter.fmt_expr(callee) if hasattr(self, '_formatter') and self._formatter else str(callee)
+        
+        # If still null, try extracting from formatted Var (e.g., Var with name like "func_401234")
+        if callee_str is None and isinstance(callee, Var) and hasattr(self._formatter, 'fmt_expr'):
+            expr_str = self._formatter.fmt_expr(callee)
+            # Check if it's a known function name pattern  
+            if expr_str.startswith("func_") or expr_str.startswith("plt_"):
+                callee_str = expr_str
+            elif expr_str in ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"):
+                # Indirect call through register - we can't resolve the target without dataflow tracking
+                callee_str = None  # Signal that this is unresolved
+            else:
+                callee_str = expr_str
+        
+        # Fallback to raw expression formatting or register-based indirection note
+        if callee_str is None:
+            if isinstance(callee, Var) and hasattr(self._formatter, 'fmt_expr'):
+                expr_str = self._formatter.fmt_expr(callee)
+                if expr_str in ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"):
+                    # Indirect call - mark as unresolved but show register
+                    callee_str = f"/* ind: {expr_str} */?"  
+                else:
+                    callee_str = expr_str
+            else:
+                callee_str = self._formatter.fmt_expr(callee) if hasattr(self, '_formatter') and self._formatter else str(callee)
         # Format args
         args_str = ", ".join(
             self._formatter.fmt_expr(a) if hasattr(self, '_formatter') and self._formatter else str(a)

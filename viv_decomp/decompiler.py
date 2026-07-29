@@ -113,7 +113,7 @@ class VivisectGraphBuilder(GraphBuilder):
             )
             fallback_name = f"func_{funcva:x}"
             return BlockGraph(
-                entry_block=entry, blocks={}, name=fallback_name,
+                entry_block=entry, blocks={funcva: entry}, name=fallback_name,
             )
 
         # Get symbolik graph from architecture-specific analysis context
@@ -143,6 +143,7 @@ class VivisectGraphBuilder(GraphBuilder):
             entry_block = BasicBlock(
                 addr=funcva, is_entry=True, label=f"func_{funcva:x}"
             )
+            blocks_dict[funcva] = entry_block
             return BlockGraph(
                 entry_block=entry_block, blocks=blocks_dict, name=label,
             )

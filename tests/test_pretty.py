@@ -149,7 +149,7 @@ class TestEntryAddr:
     def test_from_min_key_no_blocks(self, ssa):
         g = type("Graph", (), {"blocks": {}, "entry_block": None, "entry": None})()
         pp = PrettyPrinter("main", g, ssa)
-        assert pp._entry_addr() == 0
+        assert pp._entry_addr() is None
 
 
 # ── _get_return_type ──
