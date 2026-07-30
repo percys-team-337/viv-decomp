@@ -227,6 +227,13 @@ class VivisectDecompiler:
             self.graph = self.graph_builder.get_graph(funcva, name)
             logger.debug(f"Built BlockGraph: {len(self.graph.blocks)} blocks")
             
+            # S2 Step: Collapse unconditional forward jumps (pre-SSA simplification)
+            from dec_engine.dec_impl.structuring import collapse_unconditional_jumps
+            old_block_count = len(self.graph.blocks)
+            self.graph = collapse_unconditional_jumps(self.graph)
+            if old_block_count != len(self.graph.blocks):
+                logger.debug("Collapse pass: %d -> %d blocks", old_block_count, len(self.graph.blocks))
+            
             # 2. Run SSA construction
             if self.do_ssa:
                 self.ssa_state = SsaState()
