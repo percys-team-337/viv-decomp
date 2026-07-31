@@ -1,31 +1,32 @@
-"""Dominator and loop detection - S2 phase 1 stub."""
-from __future__ import annotations
-from typing import Dict, Optional
-import logging
-
-logger = logging.getLogger(__name__)
+"""S2 dominator and loop detection stub."""
 
 
 def compute_dominators(graph):
-    """Compute immediate dominators. Returns {addr: idom_addr | None for entry}.""" 
+    """Compute immediate dominator map. Returns {addr: parent or None}."""
     if not graph.blocks:
         return {}
     
-    # Find entry
+    keys = list(graph.keys())
+    if not keys:
+        return {}
+    
     entry = getattr(graph, 'entry_block', None)
-    if entry and getattr(entry, 'addr', None) in graph.blocks:
-        entry_addr = entry.addr
-    else:  
-        entry_addr = min(graph.keys()) if graph.blocks else 0
+    head = min(keys) if not (entry and hasattr(entry, 'addr') and entry.addr in keys) else entry.addr
     
-    result = {addr: (None if addr == entry_addr else -1) for addr in graph}
-    
-    # TODO: Implement proper iterative dominator computation
-    
+    result = {}
+    for k in keys:
+        if k == head:
+            result[k] = None  # Entry has no idom
+        else:
+            result[k] = head  # Oversimplified: all dominated by entry
+            
     return result
 
 
-def find_natural_loops(graph, doms=None):
-    """Find natural loops from back-edges. Returns list of {header, body}.""" 
-    logger.info("Loop detection placeholder - uses stub")  
+def find_loops(graph):
+    """Find natural loops. Placeholder."""
     return []
+
+
+# Alias for compatibility with __init__.py
+find_natural_loops = find_loops
