@@ -48,30 +48,10 @@ class PrettyPrinter:
         self._vw = workspace
         # Cache of names discovered via Vivisect's analysis
         self._name_cache: dict[int, str] = {}
-
-    def _build_var_map(self):
-        """Build variable rename map from SSA variable registry."""
-        pass  # Placeholder for SSA variable renaming
-
-    def _is_loop_header(self, addr) -> bool:
-        """Check if a block is a loop header (has back-edge to it)."""
-        block = self.graph.blocks.get(addr)
-        if block is None:
-            return False
-        return len(block.predecessors) > 0 and block in self._loop_headers
-
-    def _is_switch_entry(self, addr) -> bool:
-        """Check if a block is a switch/case entry (has >= 3 successors)."""
-        block = self.graph.blocks.get(addr)
-        if block is None:
-            return False
-        return len(block.successors) >= 3
-
-    def _analyze_switches(self):
-        """Analyze the graph to identify switch/case structures."""
-        for addr, block in self.graph.blocks.items():
-            if len(block.successors) >= 3:
-                self._switch_entries.add(addr)
+        # Structured control flow data
+        self._dominators: dict[int, Optional[int]] = {}  # idom map
+        self._natural_loops: list[dict] = []  # [{header, body_addrs, back_edges}]
+        self._visited_blocks: set[int] = set()
 
     def _detect_prologue_length(self, entry):
         """Count prologue instructions in the entry block before real work."""
@@ -246,7 +226,7 @@ class PrettyPrinter:
                 walk_memref(instr)
 
     def generate(self) -> str:
-        """Generate the complete C-like pseudocode string."""
+        """Generate the complete C-like pseudocode string using structured control flow."""
         self._visited.clear()
         self._output = []
 
@@ -261,18 +241,24 @@ class PrettyPrinter:
         self._output.append(f"{self._get_return_type()}")
         self._output.append(f"{self.func_name}(")
 
-        # Find entry block
+        # Find entry block and compute structured control flow
         entry = self.graph.blocks.get(self._entry_addr())
         if entry is not None:
             self._output.append(")")
             self._output.append("{")
+            
+            # Phase 1: Compute dominators and natural loops
+            self._compute_dominators()
+            self._find_natural_loops()
+            
+            # Phase 2: Walk CFG using dominator tree for structured output
             self._formatter.inc()
-            self._analyze_switches()
-            self._loop_headers = {
-                addr for addr, block in self.graph.blocks.items()
-                if self._is_loop_header(addr)
-            }
-            self._enter_block(self._entry_addr())
+            loop_map = {l['header']: l for l in self._natural_loops}
+            dom_children = self._build_dominator_tree()
+            entry_addr = self._entry_addr()
+            if entry_addr is not None and entry_addr in self.graph.blocks:
+                self._walk_structured(entry_addr, loop_map, dom_children)
+            
             self._formatter.dec()
             self._output.append("}")
         else:
@@ -281,10 +267,342 @@ class PrettyPrinter:
             self._output.append("  // No entry point found")
             self._output.append("}")
 
-
         self._output.append("")
-
         return "\n".join(self._output)
+
+    def _walk_structured(self, addr: int, loop_map: dict, dom_children: dict):
+        """Walk CFG using dominator tree for structured output instead of DFS."""
+        if addr in self._visited or addr not in self.graph.blocks:
+            return
+        self._visited.add(addr)
+        
+        block = self.graph.blocks[addr]
+        is_header = addr in loop_map
+        
+        # Emit prologue/local vars once for entry
+        if addr == self._entry_addr():
+            prologue_len = self._detect_prologue_length(block)
+            lines = self._format_prologue(block)
+            if hasattr(self, '_stack_vars') and self._stack_vars:
+                for off in sorted(self._stack_vars.keys()):
+                    vname = self._stack_vars[off]
+                    lines.append(f"    uint64_t {vname};")
+            self._output.extend(lines)
+        else:
+            prologue_len = 0
+        
+        # Add block label
+        if prologue_len == 0 and not is_header:
+            self._output.append(f"  L_{addr}:")
+        
+        # Emit block body instructions (excluding branches)
+        for i, instr in enumerate(block.instructions):
+            if prologue_len > 0 and i < prologue_len:
+                continue
+            
+            if isinstance(instr, Branch):
+                continue  # Handled below
+            if isinstance(instr, NoOp):
+                self._output.append("    nop;")
+            elif instr.__class__.__name__ == 'Call':
+                self._output.append(f"    {self._format_call_instr(instr)};")
+            elif instr.__class__.__name__ == 'Assignment':
+                line = self._format_assignment_instr(instr)
+                dst_name = ''
+                if isinstance(instr.destination, Var):
+                    dst_name = str(instr.destination.name) if instr.destination.name else ''
+                # Strip stack canary init
+                if dst_name == 'rax' and '= 0' in line:
+                    is_stack_canary = any('__stack_chk_guard' in prev_line or 'rax' in prev_line 
+                                         for prev_line in self._output[-6:])
+                    if is_stack_canary:
+                        continue
+                # Strip eflags_ intermediates
+                if isinstance(instr.destination, Var) and dst_name.startswith('eflags_'):
+                    continue
+                # Strip dead _t_ temps
+                dst_str_check = (self._formatter.fmt_expr(instr.destination) 
+                                if hasattr(self, '_formatter') else str(instr.destination))
+                dst_str_check = dst_str_check.lstrip('$')
+                if dst_str_check.startswith('_t_') and dst_str_check not in getattr(self, '_used_temps', set()):
+                    continue
+                self._output.append(f"    {line};")
+            else:
+                self._output.append(f"    {instr}")
+        
+        # Handle control flow based on branch type
+        branches = [ins for ins in block.instructions if isinstance(ins, Branch)]
+        
+        if is_header:
+            # Loop header: emit back-edge comment then walk dominator tree children
+            loop_info = loop_map[addr]
+            self._output.append(f"  // loop body starts here (back-edge to L_{addr})")
+            for child in sorted(dom_children.get(addr, [])):
+                self._walk_structured(child, loop_map, dom_children)
+        elif len(branches) >= 2:
+            # If/else from two conditional branches
+            self._output_if_else(block, addr, branch_count=1)  # Emit once per block level
+        elif len(branches) == 1:
+            # Single conditional branch or unconditional jump
+            self._output_single_branch(block, addr)
+        else:
+            # No branches - follow successors (shouldn't happen for terminal blocks)
+            for succ in block.successors:
+                if hasattr(succ, 'addr') and succ.addr not in self._visited:
+                    self._walk_structured(succ.addr, loop_map, dom_children)
+
+    def _output_if_else(self, block, addr: int, branch_count: int):
+        """Emit if/else construct from conditional branches."""
+        branches = [ins for ins in block.instructions if isinstance(ins, Branch)]
+        cond1_raw = self._formatter.fmt_expr(branches[0].condition) if branches[0].condition else "true"
+        
+        # Format condition string (handle eflags_ as unresolved flag check)
+        if cond1_raw.startswith('eflags_'):
+            cond_str = f"/* {cond1_raw}: flags */"
+            actual_cond = "*"  # placeholder
+        else:
+            cond_str = cond1_raw.lstrip('(').rstrip(')')
+            actual_cond = cond1_raw
+        
+        if len(branches) >= 2:
+            # Two-way branch -> if/else  
+            b1, b2 = branches[0], branches[1]
+            t1_addr = getattr(getattr(b1, 'true_target', None), 'addr', None)
+            t2_addr = getattr(getattr(b2, 'true_target', None), 'addr', None)
+            
+            if cond_str.startswith('/*') and '*/' in cond_str:
+                self._output.append(f"    {cond_str}")
+                self._output.append("    if (*) {")  # Unresolved condition
+            else:
+                self._output.append(f"    if ({cond_str}) {{")
+            
+            # Visit target block
+            if t1_addr is not None and t1_addr not in self._visited:
+                saved_visitors = dict(self._visited)
+                self._walk_structured(t1_addr, {}, {})
+            
+            if t2_addr is not None:
+                self._output.append("    } else {")
+                if t2_addr not in self._visited:
+                    self._walk_structured(t2_addr, {}, {})
+            
+            self._output.append("}")
+        else:
+            # Single conditional branch
+            target = getattr(getattr(branches[0], 'true_target', None), 'addr', None)
+            if cond_str.startswith('/*') and '*/' in cond_str:
+                self._output.append(f"    {cond_str}")
+            elif not actual_cond.startswith('(NOT'):
+                self._output.append(f"    if ({actual_cond}) {{")
+                if target is not None and target not in self._visited:
+                    saved_v = dict(self._visited)
+                    self._walk_structured(target, {}, {})
+                self._output.append("}")
+            else:
+                # Negation pattern
+                base = actual_cond[4:].rstrip(')').replace('~', '').strip() if actual_cond.startswith('(NOT') or actual_cond.startswith('~(') else actual_cond[:-1]
+                self._output.append(f"    if ({base}) {{")
+                if target and target not in self._visited:
+                    self._walk_structured(target, {}, {})
+                self._output.append("}")
+
+    def _compute_dominators(self):
+        """Compute immediate dominators using iterative dataflow."""
+        if not self.graph.blocks:
+            return
+        
+        all_addrs = list(self.graph.blocks.keys())
+        entry_addr = self._entry_addr()
+        
+        # Initialize: each block dominated by everyone (will narrow)
+        doms = {}
+        for addr in all_addrs:
+            if addr == entry_addr:
+                doms[addr] = {entry_addr}
+            else:
+                doms[addr] = set(all_addrs)
+        
+        changed = True
+        iterations = 0
+        max_iter = len(all_addrs) * 2 + 10
+        
+        while changed and iterations < max_iter:
+            changed = False
+            iterations += 1
+            for addr in all_addrs:
+                if addr == entry_addr:
+                    continue
+                block = self.graph.blocks[addr]
+                preds = [p.addr for p in getattr(block, 'predecessors', [])
+                         if hasattr(p, 'addr') and p.addr in doms and doms[p.addr]]
+                if not preds:
+                    continue
+                common = set(doms[preds[0]])
+                for p in preds[1:]:
+                    common &= doms.get(p, all_addrs)
+                new_dom = common | {addr}
+                if new_dom != doms[addr]:
+                    doms[addr] = new_dom
+                    changed = True
+        
+        # Compute immediate dominators (closest strict dominator)
+        idoms: dict[int, Optional[int]] = {}
+        for addr in all_addrs:
+            if addr not in doms or len(doms[addr]) <= 1:
+                idoms[addr] = None
+                continue
+            strict_doms = doms[addr] - {addr}
+            if not strict_doms:
+                idoms[addr] = None
+            elif len(strict_doms) == 1:
+                idoms[addr] = next(iter(strict_doms))
+            else:
+                idoms[addr] = min(strict_doms, key=lambda d: len(doms.get(d, {d})))
+        
+        self._dominators = idoms
+
+    def _find_natural_loops(self):
+        """Find natural loops using dominator tree + back-edge detection."""
+        if not self.graph.blocks or not self._dominators:
+            return
+        
+        # Build dominance sets from idom map
+        dom_sets: dict[int, set[int]] = {}
+        for addr in self._dominators:
+            d_set = {addr}
+            cur = self._dominators.get(addr)
+            while cur is not None and cur != -1 and cur in self.graph.blocks:
+                d_set.add(cur)
+                nxt = self._dominators.get(cur) if cur in self._dominators else None
+                if nxt == cur or nxt is None:
+                    break
+                cur = nxt
+            dom_sets[addr] = d_set
+        
+        # Find back-edges (src -> dst where dst dominates src)
+        back_edges: list[tuple[int, int]] = []
+        all_keys = list(self.graph.blocks.keys())
+        for addr, block in self.graph.blocks.items():
+            succs = [s.addr for s in getattr(block, 'successors', []) 
+                     if hasattr(s, 'addr') and s.addr in self.graph.blocks]
+            for dst in succs:
+                if dst != addr and dst in dom_sets.get(addr, set()):
+                    back_edges.append((addr, dst))
+        
+        # Group by header and compute bodies
+        loop_map: dict[int, dict] = {}
+        processed: set[int] = set()
+        
+        for src, dst in back_edges:
+            if dst in processed:
+                continue
+            
+            body_addrs: set[int] = {dst}  # Header in body
+            worklist = [src]
+            visited = {dst}
+            
+            while worklist:
+                node_addr = worklist.pop()
+                if node_addr in visited and node_addr != src:
+                    continue
+                visited.add(node_addr)
+                body_addrs.add(node_addr)
+                
+                curr_blk = self.graph.blocks.get(node_addr)
+                if not curr_blk:
+                    continue
+                preds = getattr(curr_blk, 'predecessors', [])
+                for pred in preds:
+                    pred_addr = getattr(pred, 'addr', None)
+                    if (pred_addr is not None and 
+                        pred_addr != dst and 
+                        pred_addr not in visited):
+                        worklist.append(pred_addr)
+            
+            processed.add(dst)
+            loop_map[dst] = {
+                'header': dst,
+                'body_addrs': body_addrs,
+                'back_edges': [(src, dst)],
+                'size': len(body_addrs),
+            }
+        
+        self._natural_loops = list(loop_map.values())
+
+    def _build_dominator_tree(self) -> dict[int, list[int]]:
+        """Build dominator tree from idom map."""
+        children: dict[int, list[int]] = {}
+        for child, parent in self._dominators.items():
+            if parent is not None and parent != -1:
+                children.setdefault(parent, []).append(child)
+        
+        return dict(children)
+
+    def _output_single_branch(self, block, addr: int):
+        """Emit a single conditional branch as if-then or just comment."""
+        branches = [ins for ins in block.instructions if isinstance(ins, Branch)]
+        if not branches:
+            return
+        
+        b1 = branches[0]
+        target_addr = getattr(getattr(b1, 'true_target', None), 'addr', None)
+        
+        # Handle unconditional jumps as plain block visits
+        cond_raw = self._formatter.fmt_expr(b1.condition) if b1.condition else None
+        if not cond_raw or cond_raw == "":
+            # Unconditional jump - just follow it
+            if target_addr is not None and target_addr not in self._visited:
+                self._walk_structured(target_addr, {}, {})
+            return
+        
+        # Conditional branch
+        cond_str = f"/* {cond_raw}: flags */" if cond_raw.startswith('eflags_') else cond_raw
+        self._output.append(f"    /* condition: {cond_raw} */")
+        
+        if target_addr and target_addr not in self._visited:
+            # Check for negation pattern - strip NOT/~~ prefixes  
+            base = cond_str.lstrip('(')
+            if base.startswith('NOT('):
+                base = base[4:]
+            elif base.startswith('~'):
+                base = base[1:].lstrip('(')
+            base = base.rstrip(')')
+            self._output.append(f"    if ({base}) {{")
+            self._walk_structured(target_addr, {}, {})
+            self._output.append("}")
+            self._output.append("}")
+
+    def _generate_structured_output(self):
+        """Walk CFG using dominator tree for structured output."""
+        entry_addr = self._entry_addr()
+        if entry_addr is None or entry_addr not in self.graph.blocks:
+            self._output.append("  // Entry block not found")
+            return
+        
+        self._visited_blocks.clear()
+        dom_children = self._build_dominator_tree()
+        loop_map: dict[int, dict[int]] = {l['header']: l for l in self._natural_loops}
+        
+        # Walk dominator tree from entry (pre-order)
+        def walk_block(addr: int, in_loop: bool = False):
+            if addr in self._visited_blocks:
+                return
+            if addr not in self.graph.blocks:
+                return
+            
+            block = self.graph.blocks[addr]
+            is_header = addr in loop_map
+            
+            if is_header:
+                # Emit while/do-while for this loop
+                self._output_loop(addr, loop_map[addr])
+                # After processing the loop body, continue with children inside the loop
+                for child in sorted(dom_children.get(addr, [])):
+                    walk_block(child)
+            else:
+                # Process normal block with structured control flow
+                self._output_block_with_structured_flow(addr, dom_children)
+
 
     def _enter_block(self, addr: Optional[int], show_label: bool = True):
         """Recursively enter blocks and generate pseudocode."""
@@ -577,3 +895,22 @@ class PrettyPrinter:
         except Exception:
             pass
         return None
+
+    def _is_loop_header(self, addr: int) -> bool:
+        """Check if a block address is a loop header."""
+        return addr in self._loop_headers
+
+    def _is_switch_entry(self, addr: int) -> bool:
+        """Check if a block at the given address has 3+ successors (switch pattern)."""
+        block = self.graph.blocks.get(addr)
+        if block is None:
+            return False
+        succs = getattr(block, 'successors', [])
+        return len(succs) >= 3
+
+    def _analyze_switches(self):
+        """Scan all blocks for switch entry points (3+ successors)."""
+        self._switch_entries.clear()
+        for addr in self.graph.blocks:
+            if self._is_switch_entry(addr):
+                self._switch_entries.add(addr)
