@@ -243,7 +243,9 @@ class VivisectDecompiler:
             
             # 3. Run type inference
             if self.analyze_types:
-                self.type_env = TypeAnalyzer().analyze()
+                analyzer = TypeAnalyzer()
+                analyzer.analyze_graph(self.graph)  # propagate types over the CFG
+                self.type_env = analyzer.env
                 logger.debug("Type inference complete")
             
             # 4. Format output — pass workspace for call target resolution via vw.getName()

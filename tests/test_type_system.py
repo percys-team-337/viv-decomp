@@ -449,3 +449,61 @@ class TestTypeAnalyzer:
         assert dt is not None
         assert dt.name == "unknown"
         assert dt.size == Size.AUTO
+
+
+# ── Graph-level type propagation (S3 dataflow) ──
+
+class TestTypeAnalyzerGraph:
+    def _graph_with_assign(self):
+        """Build a one-block graph with: x = 42 (int32), y = 0 (auto)."""
+        from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+        from dec_engine.dec_impl.ir.effects import Assignment
+        b = BasicBlock(addr=0x1000, is_entry=True)
+        b.instructions = [
+            Assignment(destination=Var("x", Size.SIZE_32), source=Const(42, Size.SIZE_32)),
+            Assignment(destination=Var("y", Size.SIZE_64), source=Const(0, Size.AUTO)),
+        ]
+        return BlockGraph(entry_block=b, blocks={0x1000: b})
+
+    def test_analyze_graph_propagates_const_type(self):
+        ta = TypeAnalyzer()
+        ta.analyze_graph(self._graph_with_assign())
+        dt = ta.env.get_type_by_name("x")
+        assert dt is not None
+        assert dt.name == "int"
+        assert dt.size == Size.SIZE_32
+
+    def test_analyze_graph_skips_unknown_sources(self):
+        ta = TypeAnalyzer()
+        ta.analyze_graph(self._graph_with_assign())
+        # y = 0 with AUTO size → unknown → not recorded
+        dt = ta.env.get_type_by_name("y")
+        assert dt is None or dt.name == "unknown"
+
+    def test_analyze_graph_empty_graph(self):
+        ta = TypeAnalyzer()
+        g = type("Graph", (), {"blocks": {}})()
+        result = ta.analyze_graph(g)
+        assert result is ta.env
+        assert ta.env.types == {}
+
+    def test_analyze_graph_no_blocks_attr(self):
+        ta = TypeAnalyzer()
+        g = type("Graph", (), {})()  # no .blocks
+        result = ta.analyze_graph(g)
+        assert result is ta.env
+
+    def test_analyze_graph_pointer_from_memref(self):
+        from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+        from dec_engine.dec_impl.ir.effects import Assignment
+        base = Var("rbp", Size.SIZE_64)
+        off = Const(0x10, Size.SIZE_64)
+        mem = MemRef(base, off, size=Size.SIZE_64)
+        b = BasicBlock(addr=0x2000, is_entry=True)
+        b.instructions = [Assignment(destination=Var("ptr", Size.SIZE_64), source=mem)]
+        g = BlockGraph(entry_block=b, blocks={0x2000: b})
+        ta = TypeAnalyzer()
+        ta.analyze_graph(g)
+        dt = ta.env.get_type_by_name("ptr")
+        assert dt is not None
+        assert "ulong" in dt.name  # pointer to ulong*
