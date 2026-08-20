@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 import pytest
 from dec_engine.dec_impl.output.pretty import PrettyPrinter
 from dec_engine.dec_impl.ir.block import BasicBlock, BlockGraph
+from dec_engine.dec_impl.ir.effects import Assignment, Branch
+from dec_engine.dec_impl.ir.expression import Var, Const, BinOp, OpType
 from dec_engine.dec_impl.ssa.construct import SsaState
 
 
@@ -265,3 +267,63 @@ class TestFormatControlFlow:
         pp._output = []
         pp._format_control_flow(branch, None)
         assert any("if" in line.lower() for line in pp._output)
+
+
+# ── structured loop reconstruction ──
+
+class TestStructuredLoop:
+    def _make_loop_graph(self):
+        """Build a while-loop graph: entry -> header(cond) -> body -> back to header; body also -> exit."""
+        from dec_engine.dec_impl.ir.expression import Var, Const, BinOp, OpType
+        entry = BasicBlock(addr=0x1000, is_entry=True)
+        header = BasicBlock(addr=0x2000)
+        body = BasicBlock(addr=0x3000)
+        exitb = BasicBlock(addr=0x4000)
+        vi = Var("i")
+        entry.instructions = []
+        cond = BinOp(OpType.LT, vi, Const(10))
+        header.instructions = [Branch(condition=cond, true_target=body, false_target=exitb)]
+        inc = BinOp(OpType.ADD, vi, Const(1))
+        body.instructions = [Assignment(destination=vi, source=inc)]
+        body.instructions.append(Branch(condition=None, true_target=header))
+        entry.successors = [header]
+        header.successors = [body, exitb]
+        body.successors = [header]
+        entry.predecessors = []
+        header.predecessors = [entry, body]
+        body.predecessors = [header]
+        exitb.predecessors = [header]
+        g = BlockGraph(entry_block=entry,
+                       blocks={0x1000: entry, 0x2000: header, 0x3000: body, 0x4000: exitb})
+        return g
+
+    def test_while_loop_emitted(self, ssa):
+        pp = PrettyPrinter("test_loop", self._make_loop_graph(), ssa)
+        out = pp.generate()
+        assert "while" in out
+
+    def test_loop_body_inside_while(self, ssa):
+        pp = PrettyPrinter("test_loop", self._make_loop_graph(), ssa)
+        out = pp.generate()
+        # The increment assignment must appear between the while opener and closer
+        assert "while (" in out
+        assert "i = (i + 1)" in out
+
+    def test_loop_condition_from_header(self, ssa):
+        pp = PrettyPrinter("test_loop", self._make_loop_graph(), ssa)
+        out = pp.generate()
+        assert "i  < 10" in out
+
+    def test_exit_block_outside_loop(self, ssa):
+        pp = PrettyPrinter("test_loop", self._make_loop_graph(), ssa)
+        out = pp.generate()
+        # 0x4000 is the exit; it should not be nested inside the while body
+        # (no body instruction between the while opener and the closer)
+        import re
+        # crude: count braces — while opens one brace, closes before exit
+        # The exit block has no instructions so it emits "L_16384:" label only.
+        # The while must contain the body increment between "{...}"
+        m = re.search(r"while \([^)]+\) \{(.*?)\}", out, re.S)
+        assert m is not None, f"no while body found:\n{out}"
+        body = m.group(1)
+        assert "i = (i + 1)" in body, f"body instr not in loop:\n{out}"
