@@ -39,16 +39,15 @@ def find_real_binaries(existing: Optional[List[str]] = None) -> List[str]:
     return [b for b in (existing or DEFAULT_BINS) if os.path.exists(b)]
 
 
-def load_workspace(binary_path: str):
-    """Load and analyze a real binary into a live Vivisect workspace."""
-    import vivisect
-    vw = vivisect.VivWorkspace()
-    vw.loadFromFile(binary_path)
-    try:
-        vw.analyze()
-    except Exception as exc:  # analyzePLT benign
-        logger.debug("analyze raised (benign): %s", exc)
-    return vw
+def load_workspace(binary_path: str, ws_dir: Optional[str] = None):
+    """Load a real binary's workspace, preferring a pre-generated .viv.
+
+    Generating the analyzed workspace is the slow part (vivbin -B / analyze);
+    loading a cached ``.viv`` via ``loadWorkspace`` is ~70ms. On cache miss the
+    .viv is generated once into ``ws_dir`` (default ~/.viv) and reused.
+    """
+    from viv_decomp.vivcache import get_workspace
+    return get_workspace(binary_path, ws_dir=ws_dir)
 
 
 def _pick_functions(vw, limit: int = 20):
@@ -68,12 +67,13 @@ def decompile_function(vw, fva, arch: Optional[str] = None):
 
 
 def run_real_benchmark(binary_path: str, limit: int = 20,
-                       arch: Optional[str] = None) -> RealBinaryResult:
+                       arch: Optional[str] = None,
+                       ws_dir: Optional[str] = None) -> RealBinaryResult:
     """Decompile up to ``limit`` functions from a real binary and score."""
     from dec_engine.dec_impl.quality.metrics import QualityGate, analyze_output
 
     gate = QualityGate()  # default (non-strict) thresholds
-    vw = load_workspace(binary_path)
+    vw = load_workspace(binary_path, ws_dir=ws_dir)
     # detect arch from the workspace meta
     try:
         arch = arch or vw.getMeta("Architecture")

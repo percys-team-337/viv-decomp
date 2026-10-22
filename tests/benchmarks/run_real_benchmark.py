@@ -26,6 +26,7 @@ def main(argv=None):
     limit = 20
     bins = []
     arch = None
+    ws_dir = None
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -38,6 +39,9 @@ def main(argv=None):
         if a == "--arch":
             arch = argv[i + 1]; i += 2
             continue
+        if a == "--ws-dir":
+            ws_dir = argv[i + 1]; i += 2
+            continue
         i += 1
 
     targets = bins or find_real_binaries()
@@ -46,7 +50,8 @@ def main(argv=None):
         if not os.path.exists(bpath):
             print(f"SKIP: {bpath} not found")
             continue
-        results.append(run_real_benchmark(bpath, limit=limit, arch=arch))
+        results.append(run_real_benchmark(bpath, limit=limit, arch=arch,
+                                          ws_dir=ws_dir))
     print(summarize_real(results))
     # exit non-zero if any decompiled function failed the gate
     total_failed = sum(len(r.failures) for r in results)
