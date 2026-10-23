@@ -4,9 +4,9 @@ Handoff doc for resuming work on the decompiler. Last updated after the S8
 live-workspace symbolik lift + real-binary validation.
 
 ## Active branch & git state
-- **Current branch:** `s8-symbolik-live` (last work: live-vw symbolik lift)
-- Test suite: **501/501 passing**
-- PR#16 (open): live-workspace symbolik lift + real-binary integration
+- **Current branch:** `s8-real-benchmark` (last work: .viv workspace cache)
+- Test suite: **505/505 passing**
+- PR#17 (open): real-corpus benchmark + .viv cache; PR#18 (open): neural types
 
 ## Branch map / PRs
 | Branch | Contents | PR |
@@ -20,7 +20,9 @@ live-workspace symbolik lift + real-binary validation.
 | `s8-plugin-system` | S8 plugin system (passes + formatters) | #13 merged |
 | `s8-binary-patch` | S8 binary patching (diff/apply/regression) | #14 merged |
 | `s8-vivisect-ext` | VivisectExtension (viv_extension.py, live-vw builder) | #15 merged |
-| `s8-symbolik-live` | live-vw symbolik lift + real-binary tests | **#16 open** |
+| `s8-symbolik-live` | live-vw symbolik lift + real-binary tests | #16 merged |
+| `s8-real-benchmark` | real-corpus benchmark + .viv workspace cache | **#17 open** |
+| `s8-neural-types` | neural type inference (dependency-free ML) | **#18 open** |
 
 ## What's done (S1–S8 foundation)
 - **S0/S1** IR layer, builder, formatter, SSA.
@@ -75,9 +77,19 @@ functions (arch amd64) and decompiles end-to-end via
 - `python -m viv_decomp BIN --view` → interactive Qt app
 - `python tests/benchmarks/run_benchmark.py` → CI quality gate
 
-## Remaining phases
-- **S8** remaining: binary patching (diff/apply/regression), LLVM backend,
-  neural type inference. Plugin system (done) makes these pluggable.
+## Real corpus benchmark + .viv cache (PR#17)
+`dec_engine/dec_impl/quality/real_benchmark.py` + `viv_decomp/vivcache.py`,
+`vivgen.py`. **55/55 real funcs decompiled+passed** (small GNU ELFs).
+`.viv` cache: generate once (vivbin -B / `python -m viv_decomp.vivgen BIN`),
+load ~0.25s thereafter. 11MB rust bins now feasible via one-time background
+generation (`--timeout 3600`).
+
+## Remaining phases / TODOs
+- **Neural type inference (PR#18)** — dependency-free ML in `dec_engine/dec_impl/ml/`.
+  Next: SymbolikEmulator applied effects; train on real-corpus features.
+- **Plugin GUI interactivity** — easy interactivity with Vivisect plugin GUI.
+- **Naming & Comments** — function names + comments in decompiled output.
+- **LLVM backend** — IR-only, roadmap.
 
 ## GitHub workflow convention
 Fork → apply to fork branch → PR against upstream `atlas0fd00m/viv-decomp`.
